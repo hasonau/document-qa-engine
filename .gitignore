@@ -1,2 +1,29 @@
 **/codebasics video of RAG EXPLAINED/
 **/.ipynb_checkpoints/
+
+# Cursor / editor local config
+.cursor/
+.vscode/
+.idea/
+
+# Secrets and env
+.env
+.env.*
+!.env.example
+*.pem
+credentials.json
+**/secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# OS / junk
+.DS_Store
+Thumbs.db
