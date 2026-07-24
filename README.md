@@ -1,7 +1,7 @@
 # document-qa-engine
 Building a RAG (Retrieval-Augmented Generation) pipeline from scratch in raw Python, without frameworks like LangChain, to understand the core mechanics.
 ## Progress
-Day 1–11 complete: PDF extraction, chunking, embeddings (sentence-transformers), similarity search (sklearn → FAISS), full retrieval pipeline, from-memory rebuild, LLM generation (Groq), prompt engineering with hallucination guardrails + self-reported context citation, page/chunk metadata tracking, and heading-based hierarchical chunking with cross-page start/end page tracking.
+Day 1–12 complete: PDF extraction, chunking, embeddings (sentence-transformers), similarity search (sklearn → FAISS), full retrieval pipeline, from-memory rebuild, LLM generation (Groq), prompt engineering with hallucination guardrails + self-reported context citation, page/chunk metadata tracking, heading-based hierarchical chunking with cross-page start/end page tracking, and query rewriting via HyDE (Hypothetical Document Embeddings) experiment.
 ## Tech stack
 Python, pdfplumber, sentence-transformers, FAISS, NumPy, Groq (llama-3.3-70b-versatile)
 ## Layout
@@ -19,6 +19,7 @@ learning/               study notes
 9.Prompt_Engineering/   context labeling, hallucination guardrails, citation
 10.Metadata/            page number and chunk id metadata
 11.Hierarchical_Chunking/ heading-based chunking with startPage/endPage tracking
+12.Query_Rewriting/     HyDE-based query rewriting experiment
 ```
 Each numbered folder holds that day's notebook only. Shared assets live at the repo root under `data/` and `learning/`.
 ## Note
