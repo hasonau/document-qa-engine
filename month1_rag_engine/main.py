@@ -124,6 +124,9 @@ def ask(query, chunks, indices, client):
     return response
 
 
+__all__ = ["extract_pages", "chunk_pages", "build_index", "ask"]
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Ask a question over a PDF using the from-scratch RAG pipeline."
