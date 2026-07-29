@@ -27,3 +27,6 @@ venv/
 # OS / junk
 .DS_Store
 Thumbs.db
+
+# Personal learning notes (keep local)
+learning/curriculum-plan.md
