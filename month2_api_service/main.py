@@ -1,5 +1,6 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from pydantic import BaseModel
+import uuid
 
 from month1_rag_engine import ask, build_index, chunk_pages, extract_pages
 from sentence_transformers import SentenceTransformer as ST
@@ -11,6 +12,7 @@ load_dotenv()
 class Query(BaseModel):
     query: str
 
+model = ST("all-MiniLM-L6-v2")
 app = FastAPI()
 
 @app.get("/")
@@ -27,7 +29,6 @@ def ask_question(query: Query):
     chunks = chunk_pages(dictionary_for_pages)
     # step 3
     # Build the index
-    model = ST("all-MiniLM-L6-v2")
     index = build_index(chunks,model=model)
     # step 4
     # Initialize the client
@@ -41,5 +42,32 @@ def ask_question(query: Query):
     return {"message": "Query Asked And Answered Successfully", "query": query.query, "answer": answer}
 
 @app.post("/upload-document")
-def upload_document(file: UploadFile = File(...)):
-    return {"message": "Upload endpoint working"}
+async def upload_document(document: UploadFile = File(...),query: str = Form(...)):
+    document_id = str(uuid.uuid4())
+    # create folde first
+    os.makedirs("month2_api_service/documents", exist_ok=True)  # create if not there,otherwise ignore
+    
+    filepath = f"month2_api_service/documents/{document_id}_{document.filename}"
+    
+    # write or save in that documents folder
+    with open(filepath, "wb") as f:
+        f.write(await document.read())
+    
+    dictionary_for_pages = extract_pages(pdf_path = filepath)
+    # step 2
+    # Chunk the pages into chunks
+    chunks = chunk_pages(dictionary_for_pages)
+    # step 3
+    # Build the index
+    index = build_index(chunks,model=model)
+    # step 4
+    # Initialize the client
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    # step 5 Reterieve the indices of the chunks
+    query_embeddings = model.encode([query])
+    distances, indices = index.search(query_embeddings, 3)
+    # step 5
+    # Ask the question
+    answer = ask(query, chunks, indices, client)
+    return {"message": "Query Asked And Answered Successfully", "query": query, "answer": answer}
+   
