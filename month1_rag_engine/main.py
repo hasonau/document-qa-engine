@@ -70,7 +70,7 @@ def chunk_pages(dictionary_for_pages):
                 startPage = pageNo
 
             else:
-                # first line of chunk
+                # first line of first chunk
                 if startPage is None:
                     startPage = pageNo
 

@@ -1,6 +1,8 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from pydantic import BaseModel
 import uuid
+import chromadb
+
 
 from month1_rag_engine import ask, build_index, chunk_pages, extract_pages
 from sentence_transformers import SentenceTransformer as ST
@@ -14,6 +16,11 @@ class Query(BaseModel):
 
 model = ST("all-MiniLM-L6-v2")
 app = FastAPI()
+
+
+def chromadb_client_setup():
+    client = chromadb.PersistentClient(path="./chroma_db")
+    return client
 
 @app.get("/")
 def read_root():
@@ -61,7 +68,28 @@ async def upload_document(document: UploadFile = File(...)):
     for chunk in chunks:
         chunk["document_id"] = f"{document_id}"  
 
-    
+    # embeddings of chunks
+    chunksText=[]
+    ids = []
+    metadata = []
+    for chunk in chunks:
+        chunksText.append(chunk["chunk_text"])
+        ids.append(f"{chunk["document_id"]}_{chunk['chunkNumber']}")
+        metadata.append(
+            {
+                "document_id" : chunk["document_id"],
+                "startPage" : chunk["startPage"],
+                "chunkNumber" : chunk["chunkNumber"],
+                "endPage" : chunk["endPage"]
+            })
+
+    embeddings = model.encode(chunksText)
+
+
+    chromadb_client = chromadb_client_setup() 
+    collection = chromadb_client.get_or_create_collection(name="documents")
+    collection.add(ids=ids,embeddings = embeddings,documents = chunksText,metadatas= metadata)
+
     return {
     "message": "Document uploaded and processed successfully",
     "document_id": document_id,
