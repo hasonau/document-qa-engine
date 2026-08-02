@@ -2,7 +2,7 @@ from fastapi import FastAPI, File, UploadFile, Form
 from pydantic import BaseModel
 import uuid
 import chromadb
-
+from chromadb import K 
 
 from month1_rag_engine import ask, build_index, chunk_pages, extract_pages
 from sentence_transformers import SentenceTransformer as ST
@@ -11,16 +11,82 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+
+
 class Query(BaseModel):
-    query: str
+    query: str 
+    document_id : str
 
 model = ST("all-MiniLM-L6-v2")
 app = FastAPI()
 
 
-def chromadb_client_setup():
+def ask(query, result, client):
+
+    message = (
+        query +
+        "\nAnswer the above question only using the text below. "
+        "Say 'I don't know' if the answer is not found. "
+        "If you find an answer, mention the page number and chunk number used."
+    )
+
+    for doc, metadata in zip(result["documents"][0], result["metadatas"][0]):
+        message += f"\nPage Number: {metadata['startPage']}"
+        if metadata["startPage"] != metadata["endPage"]:
+            message += f" - {metadata['endPage']}"
+        message += f"\nChunk Number: {metadata['chunkNumber']}\n"
+        message += doc + "\n"
+
+    messages = [{"role": "user", "content": message}]
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=messages,
+    )
+
+    return response.choices[0].message.content
+
+
+def create_chromadb_params(chunks):
+    ids = []
+    metadata = []
+    chunksText = []
+
+    for chunk in chunks:
+        chunksText.append(chunk["chunk_text"])
+        ids.append(f"{chunk["document_id"]}_{chunk['chunkNumber']}")
+        metadata.append(
+            {
+                "document_id" : chunk["document_id"],
+                "startPage" : chunk["startPage"],
+                "chunkNumber" : chunk["chunkNumber"],
+                "endPage" : chunk["endPage"]
+            })
+
+    embeddings = model.encode(chunksText)
+    return ids,chunksText,metadata,embeddings
+
+def save_to_chromadb(ids, embeddings, documents, metadatas):
+    collection = get_collection()
+    collection.add(ids=ids,embeddings = embeddings,documents = documents,metadatas= metadatas)
+
+def get_collection():
     client = chromadb.PersistentClient(path="./chroma_db")
-    return client
+    return client.get_or_create_collection("documents")
+
+def query_chromadb(question, document_id):
+
+    query_embedding = model.encode([question])
+    collection = get_collection()
+    result = collection.query(
+        query_embeddings=query_embedding,
+        n_results=3,
+        where={
+            "document_id": document_id
+        }
+    )
+    return result
+
 
 @app.get("/")
 def read_root():
@@ -28,25 +94,23 @@ def read_root():
 
 @app.post("/query")
 def ask_question(query: Query):
-    # step 1
-    # Extract the pages from the PDF
-    dictionary_for_pages = extract_pages(pdf_path="month1_rag_engine/data/building/Muhammad-pages.pdf")
-    # step 2
-    # Chunk the pages into chunks
-    chunks = chunk_pages(dictionary_for_pages)
-    # step 3
-    # Build the index
-    index = build_index(chunks,model=model)
-    # step 4
-    # Initialize the client
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-    # step 5 Reterieve the indices of the chunks
-    query_embeddings = model.encode([query.query])
-    distances, indices = index.search(query_embeddings, 3)
-    # step 5
-    # Ask the question
-    answer = ask(query.query, chunks, indices, client)
-    return {"message": "Query Asked And Answered Successfully", "query": query.query, "answer": answer}
+
+    result = query_chromadb(
+        query.query,
+        query.document_id
+    )
+    # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+    client = Groq(
+        api_key=os.getenv("GROQ_API_KEY")
+    )
+    answer = ask(query.query,result,client)
+
+    return {
+        "answer": answer,
+        "sources": result["metadatas"][0]
+    }
+
 
 @app.post("/upload-document")
 async def upload_document(document: UploadFile = File(...)):
@@ -68,27 +132,11 @@ async def upload_document(document: UploadFile = File(...)):
     for chunk in chunks:
         chunk["document_id"] = f"{document_id}"  
 
+    # chromdadb params made
+    ids, chunksText, metadata, embeddings = create_chromadb_params(chunks)
     # embeddings of chunks
-    chunksText=[]
-    ids = []
-    metadata = []
-    for chunk in chunks:
-        chunksText.append(chunk["chunk_text"])
-        ids.append(f"{chunk["document_id"]}_{chunk['chunkNumber']}")
-        metadata.append(
-            {
-                "document_id" : chunk["document_id"],
-                "startPage" : chunk["startPage"],
-                "chunkNumber" : chunk["chunkNumber"],
-                "endPage" : chunk["endPage"]
-            })
-
-    embeddings = model.encode(chunksText)
-
-
-    chromadb_client = chromadb_client_setup() 
-    collection = chromadb_client.get_or_create_collection(name="documents")
-    collection.add(ids=ids,embeddings = embeddings,documents = chunksText,metadatas= metadata)
+    chromadb_collection = save_to_chromadb(ids,embeddings,chunksText,metadata) 
+    
 
     return {
     "message": "Document uploaded and processed successfully",
