@@ -29,14 +29,18 @@ def ask(query, result, client):
         "Say 'I don't know' if the answer is not found. "
         "If you find an answer, mention the page number and chunk number used."
     )
-
-    for doc, metadata in zip(result["documents"][0], result["metadatas"][0]):
-        message += f"\nPage Number: {metadata['startPage']}"
-        if metadata["startPage"] != metadata["endPage"]:
-            message += f" - {metadata['endPage']}"
-        message += f"\nChunk Number: {metadata['chunkNumber']}\n"
-        message += doc + "\n"
-
+    found = False
+    for doc, metadata,distance in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
+        if distance <= 1.5 :
+            found = True
+            message += f"\nPage Number: {metadata['startPage']}"
+            if metadata["startPage"] != metadata["endPage"]:
+                message += f" - {metadata['endPage']}"
+            message += f"\nChunk Number: {metadata['chunkNumber']}\n"
+            message += doc + "\n"
+    
+    if not found:
+        return "Not in documents",found
     messages = [{"role": "user", "content": message}]
 
     response = client.chat.completions.create(
@@ -44,7 +48,7 @@ def ask(query, result, client):
         messages=messages,
     )
 
-    return response.choices[0].message.content
+    return response.choices[0].message.content,found
 
 
 def create_chromadb_params(chunks):
@@ -82,9 +86,10 @@ def query_chromadb(question, document_id):
         query_embeddings=query_embedding,
         n_results=3,
         where={
-            "document_id": document_id
+            "document_id": document_id  
         }
     )
+    print(result)
     return result
 
 
@@ -104,13 +109,13 @@ def ask_question(query: Query):
     client = Groq(
         api_key=os.getenv("GROQ_API_KEY")
     )
-    answer = ask(query.query,result,client)
-
-    return {
+    answer,found = ask(query.query,result,client)
+    # no chunks came back so,no need to attach sources either
+    response =  {
         "answer": answer,
         "sources": result["metadatas"][0]
-    }
-
+        }
+    return response if found else {"answer":answer,"sources":[]}
 
 @app.post("/upload-document")
 async def upload_document(document: UploadFile = File(...)):
