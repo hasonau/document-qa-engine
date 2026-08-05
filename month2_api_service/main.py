@@ -23,24 +23,32 @@ app = FastAPI()
 
 def ask(query, result, client):
 
-    message = (
-        query +
-        "\nAnswer the above question only using the text below. "
-        "Say 'I don't know' if the answer is not found. "
-        "If you find an answer, mention the page number and chunk number used."
-    )
+    instructions = ("\nAnswer the question using only the provided context. "
+        "If the context does not contain enough information, respond exactly with 'I don't know'. "
+        "If the answer is found, cite the source number, page number, and chunk number used.")
+
+    sourceCount = 1
+    # contexts = []
+    currentContext = ""
     found = False
     for doc, metadata,distance in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
         if distance <= 1.5 :
             found = True
-            message += f"\nPage Number: {metadata['startPage']}"
+
+            currentContext += f"Source {sourceCount} :\n"
+            currentContext += f"\nPage Number: {metadata['startPage']}"
             if metadata["startPage"] != metadata["endPage"]:
-                message += f" - {metadata['endPage']}"
-            message += f"\nChunk Number: {metadata['chunkNumber']}\n"
-            message += doc + "\n"
+                currentContext += f" - {metadata['endPage']}"
+            currentContext += f"\nChunk Number: {metadata['chunkNumber']}\n"
+            currentContext += doc + "\n"
+            sourceCount+=1
     
     if not found:
         return "Not in documents",found
+    
+    
+    # concatenate all three things into one
+    message = "Instructions :\n" + instructions + "\n Context :" + currentContext + "\n Question : \n" +query
     messages = [{"role": "user", "content": message}]
 
     response = client.chat.completions.create(
