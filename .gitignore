@@ -27,6 +27,11 @@ venv/
 # Local Chroma persistence
 chroma_db/
 
+# Node / frontend
+node_modules/
+dist/
+*.local
+
 # OS / junk
 .DS_Store
 Thumbs.db
