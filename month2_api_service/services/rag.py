@@ -58,7 +58,6 @@ def query_chromadb(question, document_id):
             "document_id": document_id  
         }
     )
-    print(result)
     return result
 
 

@@ -27,6 +27,53 @@
   color: #666;
 }
 
+.upload {
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid #e5e5e5;
+  background: #fff;
+}
+
+.upload-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.upload-row input[type="file"] {
+  flex: 1;
+  font-size: 0.875rem;
+  font-family: inherit;
+  color: #222;
+}
+
+.upload-row button {
+  padding: 0.65rem 1.1rem;
+  border: 1px solid #111;
+  border-radius: 4px;
+  background: #111;
+  color: #fff;
+  font-size: 0.9rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.upload-row button:disabled {
+  background: #ccc;
+  border-color: #ccc;
+  cursor: not-allowed;
+}
+
+.upload-row button:not(:disabled):hover {
+  background: #333;
+  border-color: #333;
+}
+
+.upload-status {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  color: #666;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
