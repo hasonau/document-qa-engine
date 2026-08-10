@@ -132,6 +132,20 @@
   align-self: flex-start;
 }
 
+.sources {
+  margin: 0.55rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.sources li {
+  font-size: 0.75rem;
+  color: #666;
+}
+
 .composer {
   display: flex;
   gap: 0.5rem;

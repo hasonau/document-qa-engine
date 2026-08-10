@@ -5,6 +5,8 @@ from month1_rag_engine import chunk_pages, extract_pages
 from groq import Groq
 import os
 from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb
+from sse_starlette.sse import EventSourceResponse
+import json
 
 router = APIRouter()
 
@@ -30,13 +32,17 @@ def ask_question(query: Query):
     client = Groq(
         api_key=os.getenv("GROQ_API_KEY")
     )
-    answer,found = ask(query.query,result,client)
-    # no chunks came back so,no need to attach sources either
-    response =  {
-        "answer": answer,
-        "sources": result["metadatas"][0]
-        }
-    return response if found else {"answer":answer,"sources":[]}
+    def generate():
+        for label,value in ask(query.query, result, client):
+            if label == "not_found":
+                yield{"event":"not_found", "data" : "Not in Documents"}
+                return
+            
+            yield {"event": "answer", "data": value}
+        yield {"event": "sources", "data": json.dumps(result["metadatas"][0])}     
+        
+    return EventSourceResponse(generate())
+    # return response if found else {"answer":answer,"sources":[]}
 
 @router.post("/upload-document")
 async def upload_document(document: UploadFile = File(...)):

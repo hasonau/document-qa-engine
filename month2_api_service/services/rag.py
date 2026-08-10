@@ -27,7 +27,8 @@ def ask(query, result, client):
             sourceCount+=1
     
     if not found:
-        return "Not in documents",found
+        yield ("not_found", None)
+        return
     
     
     # concatenate all three things into one
@@ -37,9 +38,13 @@ def ask(query, result, client):
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=messages,
+        stream=True
     )
 
-    return response.choices[0].message.content,found
+    for chunk in response:
+        content = chunk.choices[0].delta.content
+        if content:
+            yield ("answer",content)
 
 
 def get_collection():
