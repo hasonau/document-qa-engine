@@ -1,12 +1,31 @@
 import { useState } from "react";
 import "./App.css";
 
+const API_BASE = "http://localhost:8000";
+
 function updateLastAssistant(prev, patch) {
   const next = [...prev];
   const last = next[next.length - 1];
   if (!last || last.role !== "assistant") return prev;
   next[next.length - 1] = { ...last, ...patch(last) };
   return next;
+}
+
+async function readErrorDetail(res, fallback) {
+  try {
+    const data = await res.json();
+    if (typeof data.detail === "string" && data.detail.trim()) {
+      return data.detail;
+    }
+    if (Array.isArray(data.detail) && data.detail.length > 0) {
+      return data.detail
+        .map((item) => item.msg ?? JSON.stringify(item))
+        .join("; ");
+    }
+  } catch {
+    // non-JSON body
+  }
+  return fallback;
 }
 
 /** Parse SSE frames from a POST /query ReadableStream. */
@@ -87,26 +106,21 @@ function App() {
   const [input, setInput] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadError, setUploadError] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [documentId, setDocumentId] = useState(null);
   const [streaming, setStreaming] = useState(false);
 
-  async function handleSend(e) {
-    e.preventDefault();
-
-    const text = input.trim();
+  async function runQuery(question) {
+    const text = question.trim();
     if (!text || streaming) return;
 
-    const userMessage = { role: "user", text };
-    const assistantMessage = { role: "assistant", text: "", sources: null };
-
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
-    setInput("");
     setStreaming(true);
 
     try {
-      const res = await fetch("http://localhost:8000/query", {
+      const res = await fetch(`${API_BASE}/query`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
@@ -118,10 +132,16 @@ function App() {
       });
 
       if (!res.ok) {
+        const detail = await readErrorDetail(
+          res,
+          `Request failed (${res.status}). Try again.`,
+        );
         setMessages((prev) =>
           updateLastAssistant(prev, () => ({
-            text: "Something went wrong, try again",
+            text: detail,
             sources: null,
+            error: true,
+            retryQuestion: text,
           })),
         );
         return;
@@ -132,6 +152,7 @@ function App() {
           setMessages((prev) =>
             updateLastAssistant(prev, (last) => ({
               text: `${last.text ?? ""}${token}`,
+              error: false,
             })),
           );
         },
@@ -147,6 +168,7 @@ function App() {
             updateLastAssistant(prev, () => ({
               text: message,
               sources: null,
+              error: false,
             })),
           );
         },
@@ -157,7 +179,9 @@ function App() {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && !last.text) {
           return updateLastAssistant(prev, () => ({
-            text: "Something went wrong, try again",
+            text: "No answer came back. Try again.",
+            error: true,
+            retryQuestion: text,
           }));
         }
         return prev;
@@ -166,8 +190,10 @@ function App() {
       setMessages((prev) =>
         updateLastAssistant(prev, (last) => ({
           text: last.text
-            ? `${last.text}\n\n(Connection interrupted)`
-            : "Something went wrong, try again",
+            ? `${last.text}\n\nConnection interrupted. You can retry.`
+            : "Could not reach the server. Is the API running?",
+          error: true,
+          retryQuestion: text,
         })),
       );
     } finally {
@@ -175,32 +201,72 @@ function App() {
     }
   }
 
+  async function handleSend(e) {
+    e.preventDefault();
+
+    const text = input.trim();
+    if (!text || streaming) return;
+
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", text },
+      { role: "assistant", text: "", sources: null, error: false },
+    ]);
+    setInput("");
+    await runQuery(text);
+  }
+
+  async function handleRetryMessage(assistantIndex) {
+    if (streaming) return;
+    const assistant = messages[assistantIndex];
+    const question = assistant?.retryQuestion?.trim();
+    if (!question) return;
+
+    setMessages((prev) => {
+      const next = [...prev];
+      next[assistantIndex] = {
+        role: "assistant",
+        text: "",
+        sources: null,
+        error: false,
+      };
+      return next;
+    });
+    await runQuery(question);
+  }
+
   async function handleUpload() {
     if (!selectedFile || uploading) return;
 
     setUploading(true);
-    setUploadStatus("Uploading...");
+    setUploadError(false);
+    setUploadStatus("Uploading…");
 
     const formData = new FormData();
     // Backend expects field name "document" (UploadFile param in /upload-document)
     formData.append("document", selectedFile);
 
     try {
-      const res = await fetch("http://localhost:8000/upload-document", {
+      const res = await fetch(`${API_BASE}/upload-document`, {
         method: "POST",
+        credentials: "include",
         body: formData,
       });
 
       if (!res.ok) {
-        setUploadStatus("Upload failed");
+        const detail = await readErrorDetail(res, `Upload failed (${res.status})`);
+        setUploadError(true);
+        setUploadStatus(detail);
         return;
       }
 
       const data = await res.json();
       if (data.document_id) setDocumentId(data.document_id);
+      setUploadError(false);
       setUploadStatus(`Uploaded: ${selectedFile.name}`);
     } catch {
-      setUploadStatus("Upload failed");
+      setUploadError(true);
+      setUploadStatus("Could not reach the server. Is the API running?");
     } finally {
       setUploading(false);
     }
@@ -218,18 +284,37 @@ function App() {
           <input
             type="file"
             accept=".pdf"
-            onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => {
+              setSelectedFile(e.target.files?.[0] ?? null);
+              setUploadError(false);
+              setUploadStatus("");
+            }}
             aria-label="PDF file"
+            disabled={uploading}
           />
           <button
             type="button"
             onClick={handleUpload}
-            disabled={!selectedFile || uploading}
+            disabled={!selectedFile || uploading || streaming}
           >
-            Upload
+            {uploading ? "Uploading…" : "Upload"}
           </button>
         </div>
-        {uploadStatus ? <p className="upload-status">{uploadStatus}</p> : null}
+        {uploadStatus ? (
+          <div className={`upload-status-row${uploadError ? " is-error" : ""}${uploading ? " is-loading" : ""}`}>
+            <p className="upload-status">{uploadStatus}</p>
+            {uploadError && selectedFile ? (
+              <button
+                type="button"
+                className="retry-btn"
+                onClick={handleUpload}
+                disabled={uploading || streaming}
+              >
+                Retry upload
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
       <main className="messages">
@@ -237,12 +322,15 @@ function App() {
           <p className="empty">No messages yet. Ask a question below.</p>
         ) : (
           messages.map((msg, i) => (
-            <div key={i} className={`bubble ${msg.role}`}>
+            <div
+              key={i}
+              className={`bubble ${msg.role}${msg.error ? " error" : ""}`}
+            >
               <span className="label">{msg.role}</span>
               <p>
                 {msg.text ||
                   (msg.role === "assistant" && streaming && i === messages.length - 1
-                    ? "…"
+                    ? "Thinking…"
                     : "")}
               </p>
               {msg.role === "assistant" &&
@@ -262,6 +350,16 @@ function App() {
                   })}
                 </ul>
               ) : null}
+              {msg.role === "assistant" && msg.error && msg.retryQuestion ? (
+                <button
+                  type="button"
+                  className="retry-btn"
+                  onClick={() => handleRetryMessage(i)}
+                  disabled={streaming || uploading}
+                >
+                  Retry
+                </button>
+              ) : null}
             </div>
           ))
         )}
@@ -272,11 +370,11 @@ function App() {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask a question..."
+          placeholder={streaming ? "Waiting for answer…" : "Ask a question..."}
           aria-label="Message"
-          disabled={streaming}
+          disabled={streaming || uploading}
         />
-        <button type="submit" disabled={!input.trim() || streaming}>
+        <button type="submit" disabled={!input.trim() || streaming || uploading}>
           {streaming ? "…" : "Send"}
         </button>
       </form>
