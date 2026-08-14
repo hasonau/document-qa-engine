@@ -27,6 +27,9 @@ venv/
 # Local Chroma persistence
 chroma_db/
 
+# User-uploaded docs (runtime uploads, not source)
+month2_api_service/documents/
+
 # Node / frontend
 node_modules/
 dist/

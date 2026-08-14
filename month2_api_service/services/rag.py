@@ -1,6 +1,5 @@
 import chromadb
 from sentence_transformers import SentenceTransformer as ST
-
 model = ST("all-MiniLM-L6-v2")
 
 
@@ -52,7 +51,7 @@ def get_collection():
     return client.get_or_create_collection("documents")
 
 
-def query_chromadb(question, document_id):
+def query_chromadb(question, document_id,session_id):
 
     query_embedding = model.encode([question])
     collection = get_collection()
@@ -60,7 +59,10 @@ def query_chromadb(question, document_id):
         query_embeddings=query_embedding,
         n_results=3,
         where={
-            "document_id": document_id  
+            "$and": [
+            {"session_id": {"$eq": session_id}},
+            {"document_id": {"$eq" : document_id}},
+        ]
         }
     )
     return result
@@ -77,9 +79,11 @@ def create_chromadb_params(chunks):
         metadata.append(
             {
                 "document_id" : chunk["document_id"],
+                "session_id" : chunk["session_id"],
                 "startPage" : chunk["startPage"],
                 "chunkNumber" : chunk["chunkNumber"],
                 "endPage" : chunk["endPage"]
+
             })
 
     embeddings = model.encode(chunksText)

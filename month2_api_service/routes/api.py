@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, UploadFile ,Cookie, Response,Request,HTTPException
 from pydantic import BaseModel
 import uuid
 from month1_rag_engine import chunk_pages, extract_pages
@@ -20,12 +20,22 @@ class Query(BaseModel):
 def read_root():
     return {"message": "Hello World"}
 
-@router.post("/query")
-def ask_question(query: Query):
+@router.get("/healthz")
+def healthz():
+    return {"status": "ok"}
 
+@router.post("/query")
+def ask_question(request:Request,query: Query):
+    
+    session_id = request.cookies.get("session_id")
+    if session_id is None:
+        raise HTTPException(status_code=401, detail="No session")
+
+    
     result = query_chromadb(
         query.query,
-        query.document_id
+        query.document_id,
+        session_id
     )
     # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -45,9 +55,12 @@ def ask_question(query: Query):
     # return response if found else {"answer":answer,"sources":[]}
 
 @router.post("/upload-document")
-async def upload_document(document: UploadFile = File(...)):
+async def upload_document(response: Response,document: UploadFile = File(...),session_id: str | None = Cookie(default=None)):
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+        response.set_cookie(key="session_id", value=session_id)
     document_id = str(uuid.uuid4())
-    # create folde first
+    # create folder first
     os.makedirs("month2_api_service/documents", exist_ok=True)  # create if not there,otherwise ignore
     
     filepath = f"month2_api_service/documents/{document_id}_{document.filename}"
@@ -62,7 +75,8 @@ async def upload_document(document: UploadFile = File(...)):
     chunks = chunk_pages(dictionary_for_pages)
     # add document id to each chunk
     for chunk in chunks:
-        chunk["document_id"] = f"{document_id}"  
+        chunk["document_id"] = f"{document_id}" 
+        chunk["session_id"] = f"{session_id}" 
 
     # chromdadb params made
     ids, chunksText, metadata, embeddings = create_chromadb_params(chunks)
