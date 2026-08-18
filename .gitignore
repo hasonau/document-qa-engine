@@ -42,3 +42,9 @@ Thumbs.db
 # Personal learning notes (keep local)
 learning/curriculum-plan.md
 learning/local-guides/
+
+# LinkedIn screenshot captures (keep local)
+linkedin-screenshots/*.png
+linkedin-screenshots/*.jpg
+linkedin-screenshots/*.jpeg
+linkedin-screenshots/*.webp

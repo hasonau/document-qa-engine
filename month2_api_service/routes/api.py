@@ -7,6 +7,8 @@ import os
 from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb
 from sse_starlette.sse import EventSourceResponse
 import json
+from rank_bm25 import BM25Okapi
+import pickle
 
 router = APIRouter()
 
@@ -73,15 +75,24 @@ async def upload_document(response: Response,document: UploadFile = File(...),se
     # step 2
     # Chunk the pages into chunks
     chunks = chunk_pages(dictionary_for_pages)
+    sparse_chunks =[]
     # add document id to each chunk
     for chunk in chunks:
         chunk["document_id"] = f"{document_id}" 
         chunk["session_id"] = f"{session_id}" 
+        sparse_chunks.append(chunk["chunk_text"].split())
 
     # chromdadb params made
     ids, chunksText, metadata, embeddings = create_chromadb_params(chunks)
-    # embeddings of chunks
+    # dense embeddings of chunks
     chromadb_collection = save_to_chromadb(ids,embeddings,chunksText,metadata) 
+
+    # sparse index
+    bm25 = BM25Okapi(sparse_chunks)
+    # save to disk
+    with open(f"bm25_{document_id}.pkl", "wb") as f:
+        pickle.dump(bm25, f)
+
     
 
     return {
