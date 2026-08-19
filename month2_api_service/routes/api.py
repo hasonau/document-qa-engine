@@ -4,7 +4,7 @@ import uuid
 from month1_rag_engine import chunk_pages, extract_pages
 from groq import Groq
 import os
-from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb
+from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb,query_sparse
 from sse_starlette.sse import EventSourceResponse
 import json
 from rank_bm25 import BM25Okapi
@@ -39,6 +39,11 @@ def ask_question(request:Request,query: Query):
         query.document_id,
         session_id
     )
+
+    query_tokens = query.query.split()
+
+    result_sparse = query_sparse(query_tokens,query.document_id)
+
     # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
     client = Groq(
@@ -54,7 +59,6 @@ def ask_question(request:Request,query: Query):
         yield {"event": "sources", "data": json.dumps(result["metadatas"][0])}     
         
     return EventSourceResponse(generate())
-    # return response if found else {"answer":answer,"sources":[]}
 
 @router.post("/upload-document")
 async def upload_document(response: Response,document: UploadFile = File(...),session_id: str | None = Cookie(default=None)):
@@ -91,7 +95,11 @@ async def upload_document(response: Response,document: UploadFile = File(...),se
     bm25 = BM25Okapi(sparse_chunks)
     # save to disk
     with open(f"bm25_{document_id}.pkl", "wb") as f:
-        pickle.dump(bm25, f)
+        bm25_chunksObject = {}
+        bm25_chunksObject["bm25"] = bm25
+        bm25_chunksObject["chunks"] = chunks
+        
+        pickle.dump(bm25_chunksObject, f)
 
     
 

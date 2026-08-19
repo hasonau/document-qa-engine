@@ -1,7 +1,8 @@
 import chromadb
 from sentence_transformers import SentenceTransformer as ST
 model = ST("all-MiniLM-L6-v2")
-
+import pickle
+import numpy as np
 
 def ask(query, result, client):
 
@@ -66,6 +67,18 @@ def query_chromadb(question, document_id,session_id):
         }
     )
     return result
+
+def query_sparse(query_tokens,document_id):
+    with open(f"bm25_{document_id}.pkl", "rb") as f:
+        bm25_chunksObject = pickle.load(f)
+
+        bm25 = bm25_chunksObject["bm25"]
+        chunks = bm25_chunksObject["chunks"]
+    scores = bm25.get_scores(query_tokens)
+    top_k_indices = np.argsort(scores)[::-1][:3]
+    top_k_chunks = [chunks[i] for i in top_k_indices]
+
+    return top_k_chunks
 
 
 def create_chromadb_params(chunks):
