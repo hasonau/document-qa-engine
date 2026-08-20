@@ -81,6 +81,57 @@ def query_sparse(query_tokens,document_id):
     return top_k_chunks
 
 
+def reciprocal_rank_fusion(dense_result, sparse_chunks, k=60, top_n=3):
+    rrf_scores = {}
+    chunk_payload = {}
+
+    dense_docs = (dense_result.get("documents") or [[]])[0] or []
+    dense_metas = (dense_result.get("metadatas") or [[]])[0] or []
+    dense_dists = (dense_result.get("distances") or [[]])[0] or []
+
+    for rank, (doc, metadata, distance) in enumerate(zip(dense_docs, dense_metas, dense_dists), start=1):
+        chunk_id = metadata["chunkNumber"]
+        rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1 / (k + rank)
+        chunk_payload[chunk_id] = {
+            "document": doc,
+            "metadata": metadata,
+            "distance": distance,
+        }
+
+    for rank, chunk in enumerate(sparse_chunks, start=1):
+        chunk_id = chunk["chunkNumber"]
+        rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1 / (k + rank)
+        if chunk_id not in chunk_payload:
+            chunk_payload[chunk_id] = {
+                "document": chunk["chunk_text"],
+                "metadata": {
+                    "document_id": chunk["document_id"],
+                    "session_id": chunk["session_id"],
+                    "startPage": chunk["startPage"],
+                    "chunkNumber": chunk["chunkNumber"],
+                    "endPage": chunk["endPage"],
+                },
+                "distance": 0.0,
+            }
+
+    ranked_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:top_n]
+
+    fused_docs = []
+    fused_metas = []
+    fused_dists = []
+    for chunk_id in ranked_ids:
+        payload = chunk_payload[chunk_id]
+        fused_docs.append(payload["document"])
+        fused_metas.append(payload["metadata"])
+        fused_dists.append(payload["distance"])
+
+    return {
+        "documents": [fused_docs],
+        "metadatas": [fused_metas],
+        "distances": [fused_dists],
+    }
+
+
 def create_chromadb_params(chunks):
     ids = []
     metadata = []

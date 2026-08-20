@@ -4,7 +4,7 @@ import uuid
 from month1_rag_engine import chunk_pages, extract_pages
 from groq import Groq
 import os
-from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb,query_sparse
+from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, reciprocal_rank_fusion
 from sse_starlette.sse import EventSourceResponse
 import json
 from rank_bm25 import BM25Okapi
@@ -41,22 +41,20 @@ def ask_question(request:Request,query: Query):
     )
 
     query_tokens = query.query.split()
-
-    result_sparse = query_sparse(query_tokens,query.document_id)
-
-    # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    result_sparse = query_sparse(query_tokens, query.document_id)
+    fused = reciprocal_rank_fusion(result, result_sparse)
 
     client = Groq(
         api_key=os.getenv("GROQ_API_KEY")
     )
     def generate():
-        for label,value in ask(query.query, result, client):
+        for label,value in ask(query.query, fused, client):
             if label == "not_found":
                 yield{"event":"not_found", "data" : "Not in Documents"}
                 return
             
             yield {"event": "answer", "data": value}
-        yield {"event": "sources", "data": json.dumps(result["metadatas"][0])}     
+        yield {"event": "sources", "data": json.dumps(fused["metadatas"][0])} 
         
     return EventSourceResponse(generate())
 
