@@ -4,7 +4,7 @@ import uuid
 from month1_rag_engine import chunk_pages, extract_pages
 from groq import Groq
 import os
-from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, reciprocal_rank_fusion
+from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, rrf
 from sse_starlette.sse import EventSourceResponse
 import json
 from rank_bm25 import BM25Okapi
@@ -33,7 +33,7 @@ def ask_question(request:Request,query: Query):
     if session_id is None:
         raise HTTPException(status_code=401, detail="No session")
 
-    
+
     result = query_chromadb(
         query.query,
         query.document_id,
@@ -42,7 +42,32 @@ def ask_question(request:Request,query: Query):
 
     query_tokens = query.query.split()
     result_sparse = query_sparse(query_tokens, query.document_id)
-    fused = reciprocal_rank_fusion(result, result_sparse)
+    # fused = reciprocal_rank_fusion(result, result_sparse)
+    fused = rrf(result,result_sparse)
+    chunks = {}
+
+    for i, item_id in enumerate(result["ids"][0]):
+        metadata = result["metadatas"][0][i]
+
+        chunks[item_id] = {
+            "chunk_text": result["documents"][0][i],
+            "startPage": metadata["startPage"],
+            "endPage": metadata["endPage"],
+            "chunkNumber": metadata["chunkNumber"]
+        }
+
+    for item in result_sparse:
+        chunks[item["id"]] = item
+
+    # Attach the chunk data to the fused results
+    fused = [
+        {
+            "id": item_id,
+            "score": score,
+            "chunk": chunks[item_id]
+        }
+        for item_id, score in fused
+    ]
 
     client = Groq(
         api_key=os.getenv("GROQ_API_KEY")
@@ -54,7 +79,8 @@ def ask_question(request:Request,query: Query):
                 return
             
             yield {"event": "answer", "data": value}
-        yield {"event": "sources", "data": json.dumps(fused["metadatas"][0])} 
+        chunks_results = [fuse["chunk"] for fuse in fused]
+        yield {"event": "sources", "data": json.dumps(chunks_results)} 
         
     return EventSourceResponse(generate())
 
@@ -74,6 +100,7 @@ async def upload_document(response: Response,document: UploadFile = File(...),se
         f.write(await document.read())
     
     dictionary_for_pages = extract_pages(pdf_path = filepath)
+
     # step 2
     # Chunk the pages into chunks
     chunks = chunk_pages(dictionary_for_pages)
@@ -89,8 +116,12 @@ async def upload_document(response: Response,document: UploadFile = File(...),se
     # dense embeddings of chunks
     chromadb_collection = save_to_chromadb(ids,embeddings,chunksText,metadata) 
 
+    # add the ids to sparse_chunks as well
     # sparse index
     bm25 = BM25Okapi(sparse_chunks)
+    # id attachement for RRF useage later
+    for id,chunk in zip(ids,chunks):
+        chunk["id"] = id
     # save to disk
     with open(f"bm25_{document_id}.pkl", "wb") as f:
         bm25_chunksObject = {}

@@ -4,7 +4,7 @@ model = ST("all-MiniLM-L6-v2")
 import pickle
 import numpy as np
 
-def ask(query, result, client):
+def ask(query, fused, client):
 
     instructions = ("\nAnswer the question using only the provided context. "
         "If the context does not contain enough information, respond exactly with 'I don't know'. "
@@ -13,21 +13,23 @@ def ask(query, result, client):
     sourceCount = 1
     # contexts = []
     currentContext = ""
-    found = False
-    for doc, metadata,distance in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
-        if distance <= 1.5 :
-            found = True
+    found = True
 
-            currentContext += f"Source {sourceCount} :\n"
-            currentContext += f"\nPage Number: {metadata['startPage']}"
-            if metadata["startPage"] != metadata["endPage"]:
-                currentContext += f" - {metadata['endPage']}"
-            currentContext += f"\nChunk Number: {metadata['chunkNumber']}\n"
-            currentContext += doc + "\n"
-            sourceCount+=1
+    for fuse in fused:
+        currentContext += f"Source {sourceCount} :\n"
+        currentContext += f"\nPage Number: {fuse['chunk']['startPage']}"
+
+        if fuse["chunk"]["startPage"] != fuse["chunk"]["endPage"]:
+            currentContext += f" - {fuse['chunk']['endPage']}"
+
+        currentContext += f"\nChunk Number: {fuse['chunk']['chunkNumber']}\n"
+        currentContext += fuse["chunk"]["chunk_text"] + "\n"
+
+        sourceCount += 1
+        
     
     if not found:
-        yield ("not_found", None)
+        yield ("not_found",found)
         return
     
     
@@ -81,55 +83,22 @@ def query_sparse(query_tokens,document_id):
     return top_k_chunks
 
 
-def reciprocal_rank_fusion(dense_result, sparse_chunks, k=60, top_n=3):
-    rrf_scores = {}
-    chunk_payload = {}
+def rrf(dense_results,sparse_chunks,k=60,top_n=3):
 
-    dense_docs = (dense_result.get("documents") or [[]])[0] or []
-    dense_metas = (dense_result.get("metadatas") or [[]])[0] or []
-    dense_dists = (dense_result.get("distances") or [[]])[0] or []
+    scores = {}
 
-    for rank, (doc, metadata, distance) in enumerate(zip(dense_docs, dense_metas, dense_dists), start=1):
-        chunk_id = metadata["chunkNumber"]
-        rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1 / (k + rank)
-        chunk_payload[chunk_id] = {
-            "document": doc,
-            "metadata": metadata,
-            "distance": distance,
-        }
+    for index,item in enumerate(dense_results["ids"][0]):
+        rank = index+1
+        scores[item] = scores.get(item,0) + 1/(k+rank)
 
-    for rank, chunk in enumerate(sparse_chunks, start=1):
-        chunk_id = chunk["chunkNumber"]
-        rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1 / (k + rank)
-        if chunk_id not in chunk_payload:
-            chunk_payload[chunk_id] = {
-                "document": chunk["chunk_text"],
-                "metadata": {
-                    "document_id": chunk["document_id"],
-                    "session_id": chunk["session_id"],
-                    "startPage": chunk["startPage"],
-                    "chunkNumber": chunk["chunkNumber"],
-                    "endPage": chunk["endPage"],
-                },
-                "distance": 0.0,
-            }
+    for index,item in enumerate(sparse_chunks):
+        rank = index+1
+        id = item["id"]
+        scores[id] = scores.get(id,0) + 1/(k+rank)
+    
+    scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    return scores
 
-    ranked_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:top_n]
-
-    fused_docs = []
-    fused_metas = []
-    fused_dists = []
-    for chunk_id in ranked_ids:
-        payload = chunk_payload[chunk_id]
-        fused_docs.append(payload["document"])
-        fused_metas.append(payload["metadata"])
-        fused_dists.append(payload["distance"])
-
-    return {
-        "documents": [fused_docs],
-        "metadatas": [fused_metas],
-        "distances": [fused_dists],
-    }
 
 
 def create_chromadb_params(chunks):
