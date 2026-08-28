@@ -4,7 +4,7 @@ import uuid
 from month1_rag_engine import chunk_pages, extract_pages
 from groq import Groq
 import os
-from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, rrf
+from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, rrf,rerank
 from sse_starlette.sse import EventSourceResponse
 import json
 from rank_bm25 import BM25Okapi
@@ -33,7 +33,7 @@ def ask_question(request:Request,query: Query):
     if session_id is None:
         raise HTTPException(status_code=401, detail="No session")
 
-
+    # dense results
     result = query_chromadb(
         query.query,
         query.document_id,
@@ -41,9 +41,13 @@ def ask_question(request:Request,query: Query):
     )
 
     query_tokens = query.query.split()
+    # sparse results
     result_sparse = query_sparse(query_tokens, query.document_id)
-    # fused = reciprocal_rank_fusion(result, result_sparse)
+    # rrf step
     fused = rrf(result,result_sparse)
+
+    # for reranking
+
     chunks = {}
 
     for i, item_id in enumerate(result["ids"][0]):
@@ -59,27 +63,41 @@ def ask_question(request:Request,query: Query):
     for item in result_sparse:
         chunks[item["id"]] = item
 
-    # Attach the chunk data to the fused results
-    fused = [
-        {
-            "id": item_id,
-            "score": score,
-            "chunk": chunks[item_id]
-        }
-        for item_id, score in fused
-    ]
+    # make pairs
+    pairs = []
+    candidate_ids =[]
+    for item_id, score in fused:
+        chunk_text = chunks[item_id]["chunk_text"]
 
+        candidate_ids.append(item_id)
+        pairs.append((query.query, chunk_text))
+
+    rerank_scores = rerank(pairs)
+
+    re_paired = list(zip(rerank_scores, pairs,candidate_ids)) 
+    top_3 = sorted(re_paired, key=lambda x:x[0], reverse=True)
+    top_3 = top_3[:3]
+
+    reranked_fused = []
+
+    for score, pair, candidate_id in top_3:
+        reranked_fused.append({
+            "id": candidate_id,
+            "score": score,
+            "chunk": chunks[candidate_id]
+        })
+    
     client = Groq(
         api_key=os.getenv("GROQ_API_KEY")
     )
     def generate():
-        for label,value in ask(query.query, fused, client):
+        for label,value in ask(query.query, reranked_fused, client):
             if label == "not_found":
                 yield{"event":"not_found", "data" : "Not in Documents"}
                 return
             
             yield {"event": "answer", "data": value}
-        chunks_results = [fuse["chunk"] for fuse in fused]
+        chunks_results = [rerank_fuse["chunk"] for rerank_fuse in reranked_fused]
         yield {"event": "sources", "data": json.dumps(chunks_results)} 
         
     return EventSourceResponse(generate())

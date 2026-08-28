@@ -1,6 +1,8 @@
 import chromadb
 from sentence_transformers import SentenceTransformer as ST
+from sentence_transformers import CrossEncoder
 model = ST("all-MiniLM-L6-v2")
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 import pickle
 import numpy as np
 
@@ -60,7 +62,7 @@ def query_chromadb(question, document_id,session_id):
     collection = get_collection()
     result = collection.query(
         query_embeddings=query_embedding,
-        n_results=3,
+        n_results=10,
         where={
             "$and": [
             {"session_id": {"$eq": session_id}},
@@ -77,13 +79,13 @@ def query_sparse(query_tokens,document_id):
         bm25 = bm25_chunksObject["bm25"]
         chunks = bm25_chunksObject["chunks"]
     scores = bm25.get_scores(query_tokens)
-    top_k_indices = np.argsort(scores)[::-1][:3]
+    top_k_indices = np.argsort(scores)[::-1][:10]
     top_k_chunks = [chunks[i] for i in top_k_indices]
 
     return top_k_chunks
 
 
-def rrf(dense_results,sparse_chunks,k=60,top_n=3):
+def rrf(dense_results,sparse_chunks,k=60,top_n=10):
 
     scores = {}
 
@@ -99,6 +101,10 @@ def rrf(dense_results,sparse_chunks,k=60,top_n=3):
     scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
     return scores
 
+
+def rerank(pairs):
+    scores = reranker.predict(pairs)
+    return scores
 
 
 def create_chromadb_params(chunks):
