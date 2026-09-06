@@ -1,12 +1,101 @@
 # document-qa-engine
 
-A from-scratch RAG learning project — Month 1 builds the core engine in raw Python (no LangChain); Month 2 turns it into an API service.
+An AI Document Assistant: a RAG system that supports multi-document PDF upload, structure-aware chunking (heading detection with a headerless-document fallback), hybrid search (dense + BM25 fused with RRF), and cross-encoder reranking. It is exposed as a FastAPI service with streaming SSE answers and a React chat UI.
 
 ```
-month1-rag-engine/     notebooks + CLI for the RAG pipeline
-month2-api-service/    API service (in progress)
+month1_rag_engine/     notebooks + reusable RAG logic + CLI
+month2_api_service/    FastAPI service (upload, query, hybrid retrieval)
+month2_frontend/       Vite + React chat UI
 learning/              study curriculum
 ```
+
+---
+
+## Architecture
+
+Three layers:
+
+**`month1_rag_engine/`** — pure, reusable RAG logic with no HTTP concerns. `extract_pages()` pulls text with pdfplumber. `detect_sections()` splits pages into heading-bounded sections. `chunk_sections()` then splits each section with fixed-size windows (200 words, 30-word overlap) and attaches `sectionNumber`, `heading`, `startPage`, `endPage`, and `chunkNumber`. Embedding and CLI-era FAISS indexing / generation helpers still live here for the Month 1 notebooks and CLI.
+
+**`month2_api_service/`** — FastAPI service that wraps that engine:
+- `main.py` — app setup, CORS for the Vite origin (`http://localhost:5173` / `http://127.0.0.1:5173`), dotenv, router mount
+- `routes/api.py` — HTTP endpoints: `POST /upload-document`, `POST /query` (SSE), `GET /healthz`
+- `services/rag.py` — RAG business logic: Chroma persistence, BM25 sparse query, RRF fusion, cross-encoder rerank, streaming generation
+
+**`month2_frontend/`** — Vite + React chat UI. Upload a PDF to `/upload-document` (cookie session), then ask questions against `/query` over SSE (`credentials: "include"`). Answers stream token-by-token; sources (chunk number + page range) render under each assistant message.
+
+Ingestion path: PDF → `extract_pages` → `detect_sections` → `chunk_sections` (or a synthetic `"Full Document"` section if no headings) → Chroma (`./chroma_db`, collection `documents`) + a per-document BM25 pickle (`bm25_{document_id}.pkl`).
+
+Query path: session cookie required → dense Chroma query (filtered by `session_id` + `document_id`, top 10) and BM25 (top 10) → RRF (`k=60`, top 10) → cross-encoder rerank → top 3 chunks into Groq → SSE `answer` tokens, then a `sources` event.
+
+---
+
+## Tech stack
+
+- **FastAPI** + **uvicorn** — HTTP service
+- **ChromaDB** — persistent vector store (`PersistentClient`, path `./chroma_db`)
+- **Groq** (`llama-3.3-70b-versatile`) — generation
+- **sentence-transformers** (`all-MiniLM-L6-v2`) — dense embeddings
+- **rank_bm25** (`BM25Okapi`) — sparse retrieval
+- **cross-encoder reranker** (`cross-encoder/ms-marco-MiniLM-L-6-v2`)
+- **sse-starlette** — streaming query responses
+- **pdfplumber** — PDF text extraction
+- **React** (Vite) — chat UI
+
+---
+
+## Features implemented so far
+
+- **Multi-document upload** — each PDF gets a `document_id`; the UI queries that id
+- **Session-based tenant isolation** — upload sets a `session_id` cookie; Chroma queries are filtered by both `session_id` and `document_id` (`/query` returns 401 if the cookie is missing)
+- **Persistent Chroma storage** — embeddings survive process restarts under `./chroma_db`
+- **Hybrid search** — dense (Chroma) + sparse (BM25) fused with Reciprocal Rank Fusion
+- **Cross-encoder reranking** — RRF candidates rescored; top 3 go to the LLM
+- **Streaming SSE responses** — `/query` yields `answer` tokens, then a `sources` JSON payload
+- **Structure-aware chunking** — heading detection, then per-section fixed-size splits; documents with no detected headings fall back to one synthetic `"Full Document"` section and the same `chunk_sections()` path
+- **Source metadata in context** — the prompt includes section heading, page range, and chunk number
+
+---
+
+## Setup / running
+
+Requires Python 3.10+ and Node.js (for the frontend).
+
+1. Install Python dependencies from the repo root:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Create a `.env` file at the **repo root** with your Groq API key (see `.env.example`):
+
+```
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+You can get a free API key at [console.groq.com](https://console.groq.com). The `.env` file is gitignored — never commit it.
+
+3. Start the FastAPI server from the repo root:
+
+```bash
+python -m uvicorn month2_api_service.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+The API listens on [http://localhost:8000](http://localhost:8000). `GET /healthz` should return `{"status": "ok"}`.
+
+4. Start the React frontend:
+
+```bash
+cd month2_frontend
+npm install
+npm run dev
+```
+
+Open the URL Vite prints (usually [http://localhost:5173](http://localhost:5173)). Upload a PDF, then ask a question.
+
+> Note: this repo path contains `&`, which breaks Windows `vite.cmd` shims. Frontend scripts call Vite via `node` instead.
+
+Month 1 notebooks and the CLI still use their own setup (FAISS, Jupyter); see the Month 1 section below.
 
 ---
 
@@ -148,8 +237,10 @@ Full write-up with per-question analysis in [`month1-rag-engine/13.Evaluation/EV
 
 ---
 
-## Month 2 — API Service (In Progress)
+## Decision Log
 
-Under active development in `month2-api-service/`.
+**Heading detection heuristic (Day 17):** Headings are detected using a simple rule — a line with fewer than 8 words and no trailing period is treated as a heading. This avoids ML-based layout detection, keeping the pipeline fast and dependency-free, at the cost of occasionally misclassifying short non-heading lines.
 
-Goal: turn the Month 1 RAG engine into a backend service (upload documents, query via API, persistent storage, multi-document support). No code here yet — build notes live in `learning/curriculum-plan.md`.
+**Page range trade-off for sub-chunks (Day 17):** When a section under one heading is split into multiple smaller chunks, every sub-chunk inherits the parent section's full startPage–endPage range rather than a precise individual page number. This was a deliberate simplification to avoid tracking page numbers at the line level inside the sub-chunking splitter.
+
+**Fallback for documents with no detected headings (Day 17):** If no headings are found in a document, the whole document is wrapped into a single synthetic section (heading: "Full Document") and passed through the same `chunk_sections()` function used for heading-based documents, avoiding duplicate chunking logic.
