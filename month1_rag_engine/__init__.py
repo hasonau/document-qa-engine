@@ -1,3 +1,3 @@
-from month1_rag_engine.main import ask, build_index, chunk_pages, extract_pages
+from month1_rag_engine.main import ask, build_index, detect_sections, extract_pages,chunk_sections
 
-__all__ = ["extract_pages", "chunk_pages", "build_index", "ask"]
+__all__ = ["extract_pages", "detect_sections", "build_index", "ask","chunk_sections"]

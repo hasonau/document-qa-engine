@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, UploadFile ,Cookie, Response,Request,HTTPException
 from pydantic import BaseModel
 import uuid
-from month1_rag_engine import chunk_pages, extract_pages
+from month1_rag_engine import extract_pages,detect_sections,chunk_sections
 from groq import Groq
 import os
 from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, rrf,rerank
@@ -57,7 +57,9 @@ def ask_question(request:Request,query: Query):
             "chunk_text": result["documents"][0][i],
             "startPage": metadata["startPage"],
             "endPage": metadata["endPage"],
-            "chunkNumber": metadata["chunkNumber"]
+            "chunkNumber": metadata["chunkNumber"],
+            "sectionNumber": metadata["sectionNumber"],
+            "heading": metadata["heading"]
         }
 
     for item in result_sparse:
@@ -117,11 +119,31 @@ async def upload_document(response: Response,document: UploadFile = File(...),se
     with open(filepath, "wb") as f:
         f.write(await document.read())
     
-    dictionary_for_pages = extract_pages(pdf_path = filepath)
+    # extract pages
+    dictionary_for_pages = extract_pages(pdf_path=filepath)
 
-    # step 2
-    # Chunk the pages into chunks
-    chunks = chunk_pages(dictionary_for_pages)
+    # detect sections / headings
+    sections, fallback = detect_sections(dictionary_for_pages)
+
+    if not fallback:
+        whole_document_text = " ".join(
+            page["text"] or "" for page in dictionary_for_pages
+        )
+
+        fake_section = {
+            "sectionNumber": 1,
+            "heading": "Full Document",
+            "startPage": dictionary_for_pages[0]["pageNo"],
+            "endPage": dictionary_for_pages[-1]["pageNo"],
+            "section_text": whole_document_text
+        }
+
+        chunks = chunk_sections([fake_section], document_id)
+
+    else:
+        chunks = chunk_sections(sections, document_id)
+
+    # make chunks
     sparse_chunks =[]
     # add document id to each chunk
     for chunk in chunks:

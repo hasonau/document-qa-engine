@@ -13,12 +13,12 @@ def ask(query, fused, client):
         "If the answer is found, cite the source number, page number, and chunk number used.")
 
     sourceCount = 1
-    # contexts = []
     currentContext = ""
     found = True
 
     for fuse in fused:
         currentContext += f"Source {sourceCount} :\n"
+        currentContext += f"\nSection: {fuse['chunk']['heading']}"
         currentContext += f"\nPage Number: {fuse['chunk']['startPage']}"
 
         if fuse["chunk"]["startPage"] != fuse["chunk"]["endPage"]:
@@ -114,15 +114,16 @@ def create_chromadb_params(chunks):
 
     for chunk in chunks:
         chunksText.append(chunk["chunk_text"])
-        ids.append(f"{chunk["document_id"]}_{chunk['chunkNumber']}")
+        ids.append(f"{chunk["document_id"]}_{chunk['sectionNumber']}_{chunk['chunkNumber']}")
         metadata.append(
             {
-                "document_id" : chunk["document_id"],
-                "session_id" : chunk["session_id"],
-                "startPage" : chunk["startPage"],
-                "chunkNumber" : chunk["chunkNumber"],
-                "endPage" : chunk["endPage"]
-
+                 "document_id": chunk["document_id"],
+                "session_id": chunk["session_id"],
+                "sectionNumber": chunk["sectionNumber"],
+                "heading": chunk["heading"],
+                "startPage": chunk["startPage"],
+                "endPage": chunk["endPage"],
+                "chunkNumber": chunk["chunkNumber"]
             })
 
     embeddings = model.encode(chunksText)

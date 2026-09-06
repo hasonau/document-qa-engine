@@ -25,9 +25,12 @@ def extract_pages(pdf_path):
     return dictionary_for_pages
 
 
-def chunk_pages(dictionary_for_pages):
-    chunks = []
-    chunkNumber = 1
+
+def detect_sections(dictionary_for_pages):
+    sections = []
+    headingNumber = 1
+    headingDetected = False
+
 
     heading = "Default Heading"
     current_text = []
@@ -51,17 +54,18 @@ def chunk_pages(dictionary_for_pages):
 
             # heading detected
             if len(words) < 8 and not cleaned_line.endswith("."):
+                headingDetected = True
 
                 if current_text:
-                    chunks.append({
+                    sections.append({
                         "startPage": startPage,
                         "endPage": endPage,
-                        "chunkNumber": chunkNumber,
+                        "sectionNumber": headingNumber,
                         "heading": heading,
-                        "chunk_text": " ".join(current_text).strip(),
+                        "section_text": " ".join(current_text).strip(),
                     })
 
-                    chunkNumber += 1
+                    headingNumber += 1
 
                 heading = line
                 current_text = []
@@ -81,16 +85,51 @@ def chunk_pages(dictionary_for_pages):
 
     # push last remaining chunk
     if current_text:
-        chunks.append({
+        sections.append({
             "startPage": startPage,
             "endPage": endPage,
-            "chunkNumber": chunkNumber,
+            "sectionNumber": headingNumber,
             "heading": heading,
-            "chunk_text": " ".join(current_text).strip(),
+            "section_text": " ".join(current_text).strip(),
         })
 
-    return chunks
+    return sections,headingDetected
 
+def fixed_size_chunking(section_text):
+    words = section_text.split()
+    chunks = []
+    maxChunkLength = 200
+    overlap = 30
+    i = 0
+    while i < len(words):
+        chunk = words[i:i+maxChunkLength]
+        chunks.append(" ".join(chunk))
+        i += (maxChunkLength - overlap)
+    return chunks
+    
+
+def chunk_sections(sections, document_id):
+    chunks = []
+
+    for section_number, section in enumerate(sections, start=1):
+
+        currentChunk = fixed_size_chunking(section["section_text"])
+
+        for chunk_number, chunk in enumerate(currentChunk, start=1):
+            add_chunk = {
+                "chunk_id": f"{document_id}_{section['sectionNumber']}_{chunk_number}",
+                "document_id": document_id,
+                "sectionNumber": section["sectionNumber"],
+                "chunkNumber": chunk_number,
+                "heading": section["heading"],
+                "startPage": section["startPage"],
+                "endPage": section["endPage"],
+                "chunk_text": chunk
+            }
+
+            chunks.append(add_chunk)
+
+    return chunks
 
 def build_index(chunks, model):
     chunksText = []
@@ -123,8 +162,6 @@ def ask(query, chunks, indices, client):
     )
     return response
 
-
-__all__ = ["extract_pages", "chunk_pages", "build_index", "ask"]
 
 
 def main():
