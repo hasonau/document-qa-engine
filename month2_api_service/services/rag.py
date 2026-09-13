@@ -5,6 +5,7 @@ model = ST("all-MiniLM-L6-v2")
 reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 import pickle
 import numpy as np
+import json 
 
 def ask(query, fused, client):
 
@@ -40,7 +41,7 @@ def ask(query, fused, client):
     messages = [{"role": "user", "content": message}]
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         messages=messages,
         stream=True
     )
@@ -105,6 +106,55 @@ def rrf(dense_results,sparse_chunks,k=60,top_n=10):
 def rerank(pairs):
     scores = reranker.predict(pairs)
     return scores
+
+def query_expansion(user_query,client) -> list[str]:
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[
+            {"role": "system", "content": """
+                You are a query expansion model for a RAG retrieval system.
+
+                Generate exactly 4 alternative search queries for the user's query.
+
+                Rules:
+                - Preserve the original intent.
+                - Keep queries short and search-oriented.
+                - Do not add unsupported assumptions.
+                - If the query is ambiguous, do not guess a specific meaning.
+                - Make the variants meaningfully different.
+                - Return only the 4 queries; do not explain them.
+                """
+            },
+            {
+                "role": "user",
+                "content": user_query,
+            },
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "query_expansion",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "expanded_queries": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 4,
+                            "maxItems": 4
+                        }
+                    },
+                    "required": ["expanded_queries"],
+                    "additionalProperties": False
+                }
+            }
+        }
+    )
+
+    result = json.loads(response.choices[0].message.content or "{}")
+    return result["expanded_queries"]
 
 
 def create_chromadb_params(chunks):

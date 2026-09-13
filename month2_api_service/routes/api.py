@@ -4,7 +4,7 @@ import uuid
 from month1_rag_engine import extract_pages,detect_sections,chunk_sections
 from groq import Groq
 import os
-from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, rrf,rerank
+from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, rrf,rerank,query_expansion
 from sse_starlette.sse import EventSourceResponse
 import json
 from rank_bm25 import BM25Okapi
@@ -33,42 +33,70 @@ def ask_question(request:Request,query: Query):
     if session_id is None:
         raise HTTPException(status_code=401, detail="No session")
 
-    # dense results
-    result = query_chromadb(
-        query.query,
-        query.document_id,
-        session_id
+    client = Groq(
+        api_key=os.getenv("GROQ_API_KEY")
     )
 
-    query_tokens = query.query.split()
+    queries = [query.query] + query_expansion(query.query, client)
+
+    dense_results=[]
+    sparse_results=[]
+    for q in queries:
+        dense_results.append(query_chromadb(
+            q,
+            query.document_id,
+            session_id
+        ))
+        query_tokens = q.split()
+        sparse_results.append(query_sparse(query_tokens, query.document_id))
+
+
+        
     # sparse results
-    result_sparse = query_sparse(query_tokens, query.document_id)
     # rrf step
-    fused = rrf(result,result_sparse)
+    fused_results = []
+    for dense_result, sparse_result in zip(dense_results, sparse_results):
+        fused = rrf(dense_result, sparse_result)
+        fused_results.append(fused)
+    
+
+    best_ranks = {}
+
+    for fused in fused_results:
+        for rank, (chunk_id, score) in enumerate(fused, start=1):
+
+            if chunk_id not in best_ranks:
+                best_ranks[chunk_id] = rank
+            else:
+                best_ranks[chunk_id] = min(best_ranks[chunk_id], rank)
 
     # for reranking
-
     chunks = {}
 
-    for i, item_id in enumerate(result["ids"][0]):
-        metadata = result["metadatas"][0][i]
+    # collect chunk information from all dense results
+    for result in dense_results:
+        for i, item_id in enumerate(result["ids"][0]):
+            metadata = result["metadatas"][0][i]
 
-        chunks[item_id] = {
-            "chunk_text": result["documents"][0][i],
-            "startPage": metadata["startPage"],
-            "endPage": metadata["endPage"],
-            "chunkNumber": metadata["chunkNumber"],
-            "sectionNumber": metadata["sectionNumber"],
-            "heading": metadata["heading"]
-        }
+            chunks[item_id] = {
+                "chunk_text": result["documents"][0][i],
+                "startPage": metadata["startPage"],
+                "endPage": metadata["endPage"],
+                "chunkNumber": metadata["chunkNumber"],
+                "sectionNumber": metadata["sectionNumber"],
+                "heading": metadata["heading"]
+            }
 
-    for item in result_sparse:
-        chunks[item["id"]] = item
+    # collect chunk information from all sparse results
+    for result_sparse in sparse_results:
+        for item in result_sparse:
+            chunks[item["id"]] = item
 
-    # make pairs
+    # make pairs from deduplicated candidates
     pairs = []
     candidate_ids =[]
-    for item_id, score in fused:
+
+    for item_id, rank in best_ranks.items():
         chunk_text = chunks[item_id]["chunk_text"]
 
         candidate_ids.append(item_id)
@@ -76,9 +104,14 @@ def ask_question(request:Request,query: Query):
 
     rerank_scores = rerank(pairs)
 
-    re_paired = list(zip(rerank_scores, pairs,candidate_ids)) 
-    top_3 = sorted(re_paired, key=lambda x:x[0], reverse=True)
-    top_3 = top_3[:3]
+    re_paired = list(zip(rerank_scores, pairs, candidate_ids))
+
+    top_3 = sorted(
+        re_paired,
+        key=lambda x: x[0],
+        reverse=True
+    )[:3]
+
 
     reranked_fused = []
 
@@ -89,9 +122,6 @@ def ask_question(request:Request,query: Query):
             "chunk": chunks[candidate_id]
         })
     
-    client = Groq(
-        api_key=os.getenv("GROQ_API_KEY")
-    )
     def generate():
         for label,value in ask(query.query, reranked_fused, client):
             if label == "not_found":
