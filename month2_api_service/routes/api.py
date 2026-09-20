@@ -4,11 +4,13 @@ import uuid
 from month1_rag_engine import extract_pages,detect_sections,chunk_sections
 from groq import Groq
 import os
-from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, rrf,rerank,query_expansion
+from ..services.rag import ask, create_chromadb_params, query_chromadb, save_to_chromadb, query_sparse, rrf,rerank,query_expansion,get_collection
 from sse_starlette.sse import EventSourceResponse
 import json
 from rank_bm25 import BM25Okapi
 import pickle
+import hashlib
+
 
 router = APIRouter()
 
@@ -36,6 +38,20 @@ def ask_question(request:Request,query: Query):
     client = Groq(
         api_key=os.getenv("GROQ_API_KEY")
     )
+    key = f"{query.document_id}:{query.query}"
+    hashed_key = hashlib.sha256(key.encode()).hexdigest()
+    cache_collection = get_collection("query_cache")
+
+    result = cache_collection.get(ids=[hashed_key])
+    if result["ids"]:
+        def generate_cached():
+            answer = result["documents"][0]
+            sources = json.loads(result["metadatas"][0]["sources"])
+
+            yield {"event": "answer", "data": answer}
+            yield {"event": "sources", "data": json.dumps(sources)}
+
+        return EventSourceResponse(generate_cached())
 
     queries = [query.query] + query_expansion(query.query, client)
 
@@ -121,9 +137,10 @@ def ask_question(request:Request,query: Query):
             "score": score,
             "chunk": chunks[candidate_id]
         })
-    
+
+    # cache_lookup() here 
     def generate():
-        for label,value in ask(query.query, reranked_fused, client):
+        for label,value in ask(query.query, reranked_fused, client,query.document_id):
             if label == "not_found":
                 yield{"event":"not_found", "data" : "Not in Documents"}
                 return

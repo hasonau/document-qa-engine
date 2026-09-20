@@ -6,8 +6,14 @@ reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 import pickle
 import numpy as np
 import json 
+import hashlib
 
-def ask(query, fused, client):
+def ask(query, fused, client,document_id):
+    
+    key = f"{document_id}:{query}"
+    hashed_key = hashlib.sha256(key.encode()).hexdigest()
+    
+    cache_collection = get_collection("query_cache")
 
     instructions = ("\nAnswer the question using only the provided context. "
         "If the context does not contain enough information, respond exactly with 'I don't know'. "
@@ -45,22 +51,34 @@ def ask(query, fused, client):
         messages=messages,
         stream=True
     )
-
+    full_answer = ""
     for chunk in response:
         content = chunk.choices[0].delta.content
         if content:
+            full_answer = full_answer + content
             yield ("answer",content)
+    
+    chunks_results = [item["chunk"] for item in fused]
 
+    cache_collection.add(
+        ids=[hashed_key],
+        documents=[full_answer],
+        metadatas=[{
+            "query": query,
+            "document_id": document_id,
+            "sources": json.dumps(chunks_results)
+        }]
+    )
 
-def get_collection():
+def get_collection(collection_name):
     client = chromadb.PersistentClient(path="./chroma_db")
-    return client.get_or_create_collection("documents")
+    return client.get_or_create_collection(collection_name)
 
 
 def query_chromadb(question, document_id,session_id):
 
     query_embedding = model.encode([question])
-    collection = get_collection()
+    collection = get_collection("documents")
     result = collection.query(
         query_embeddings=query_embedding,
         n_results=10,
@@ -180,5 +198,5 @@ def create_chromadb_params(chunks):
     return ids,chunksText,metadata,embeddings
 
 def save_to_chromadb(ids, embeddings, documents, metadatas):
-    collection = get_collection()
+    collection = get_collection("documents")
     collection.add(ids=ids,embeddings = embeddings,documents = documents,metadatas= metadatas)
