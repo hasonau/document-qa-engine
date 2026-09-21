@@ -139,17 +139,28 @@ def ask_question(request:Request,query: Query):
         })
 
     # cache_lookup() here 
-    def generate():
-        for label,value in ask(query.query, reranked_fused, client,query.document_id):
-            if label == "not_found":
-                yield{"event":"not_found", "data" : "Not in Documents"}
-                return
+    answer, citation_chunks = ask(
+        query.query,
+        reranked_fused,
+        client,
+        query.document_id
+    )
+
+    return {
+            "answer": answer,
+            "citations": citation_chunks
+        }
+    # def generate():
+    #     for label,value in ask(query.query, reranked_fused, client,query.document_id):
+    #         if label == "not_found":
+    #             yield{"event":"not_found", "data" : "Not in Documents"}
+    #             return
             
-            yield {"event": "answer", "data": value}
-        chunks_results = [rerank_fuse["chunk"] for rerank_fuse in reranked_fused]
-        yield {"event": "sources", "data": json.dumps(chunks_results)} 
+    #         yield {"event": "answer", "data": value}
+    #     chunks_results = [rerank_fuse["chunk"] for rerank_fuse in reranked_fused]
+    #     yield {"event": "sources", "data": json.dumps(chunks_results)} 
         
-    return EventSourceResponse(generate())
+    # return EventSourceResponse(generate())
 
 @router.post("/upload-document")
 async def upload_document(response: Response,document: UploadFile = File(...),session_id: str | None = Cookie(default=None)):

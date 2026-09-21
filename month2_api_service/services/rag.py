@@ -20,6 +20,7 @@ def ask(query, fused, client,document_id):
         "If the answer is found, cite the source number, page number, and chunk number used.")
 
     sourceCount = 1
+    source_map = {}
     currentContext = ""
     found = True
 
@@ -34,12 +35,13 @@ def ask(query, fused, client,document_id):
         currentContext += f"\nChunk Number: {fuse['chunk']['chunkNumber']}\n"
         currentContext += fuse["chunk"]["chunk_text"] + "\n"
 
+        source_map[sourceCount] = fuse["chunk"]
         sourceCount += 1
         
     
-    if not found:
-        yield ("not_found",found)
-        return
+    # if not found:
+    #     yield ("not_found",found)
+    #     return
     
     
     # concatenate all three things into one
@@ -49,26 +51,68 @@ def ask(query, fused, client,document_id):
     response = client.chat.completions.create(
         model="openai/gpt-oss-120b",
         messages=messages,
-        stream=True
+        stream=False,
+        response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "rag_answer",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "answer": {
+                                "type": "string"
+                            },
+                            "citations": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "source": {"type": "integer"}
+                                    },
+                                    "required": ["source"],
+                                    "additionalProperties": False
+                                }
+                            }
+                        },
+                        "required": ["answer", "citations"],
+                        "additionalProperties": False
+                    }
+                }
+            }
     )
+
     full_answer = ""
-    for chunk in response:
-        content = chunk.choices[0].delta.content
-        if content:
-            full_answer = full_answer + content
-            yield ("answer",content)
+    result = json.loads(response.choices[0].message.content)
+    # for chunk in response:
+    #     content = chunk.choices[0].delta.content
+    #     if content:
+    #         full_answer = full_answer + content
+    #         yield ("answer",content)
     
     chunks_results = [item["chunk"] for item in fused]
+    answer = result["answer"]
+    citations = result["citations"]
+
+    citation_chunks = []
+
+    for citation in citations:
+        source = citation["source"]
+        chunk = source_map[source]
+        citation_chunks.append(chunk)
+    
 
     cache_collection.add(
         ids=[hashed_key],
-        documents=[full_answer],
+        documents=[answer],
         metadatas=[{
             "query": query,
             "document_id": document_id,
             "sources": json.dumps(chunks_results)
         }]
     )
+
+    return answer, citation_chunks
 
 def get_collection(collection_name):
     client = chromadb.PersistentClient(path="./chroma_db")
@@ -117,6 +161,7 @@ def rrf(dense_results,sparse_chunks,k=60,top_n=10):
         id = item["id"]
         scores[id] = scores.get(id,0) + 1/(k+rank)
     
+
     scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
     return scores
 
