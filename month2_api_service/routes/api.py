@@ -139,12 +139,16 @@ def ask_question(request:Request,query: Query):
         })
 
     # cache_lookup() here 
-    answer, citation_chunks = ask(
-        query.query,
-        reranked_fused,
-        client,
-        query.document_id
-    )
+    try:
+        answer, citation_chunks = ask(
+            query.query,
+            reranked_fused,
+            client,
+            query.document_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
     return {
             "answer": answer,

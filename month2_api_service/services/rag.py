@@ -7,6 +7,17 @@ import pickle
 import numpy as np
 import json 
 import hashlib
+from pydantic import BaseModel, ConfigDict
+
+
+class Citation(BaseModel):
+    source : int 
+
+class RAGResponse(BaseModel):
+    answer: str 
+    citations : list[Citation] 
+    model_config = ConfigDict(strict=True)
+
 
 def ask(query, fused, client,document_id):
     
@@ -84,21 +95,20 @@ def ask(query, fused, client,document_id):
 
     full_answer = ""
     result = json.loads(response.choices[0].message.content)
-    # for chunk in response:
-    #     content = chunk.choices[0].delta.content
-    #     if content:
-    #         full_answer = full_answer + content
-    #         yield ("answer",content)
+    result = RAGResponse.model_validate(result)
     
     chunks_results = [item["chunk"] for item in fused]
-    answer = result["answer"]
-    citations = result["citations"]
+    answer = result.answer
+    citations = result.citations
 
     citation_chunks = []
 
     for citation in citations:
-        source = citation["source"]
-        chunk = source_map[source]
+        source = citation.source
+        if source in source_map:
+            chunk = source_map[source]
+        else:
+            raise ValueError("Invalid source")
         citation_chunks.append(chunk)
     
 
