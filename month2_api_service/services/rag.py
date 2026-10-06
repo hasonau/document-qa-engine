@@ -1,8 +1,12 @@
 import chromadb
 from sentence_transformers import SentenceTransformer as ST
 from sentence_transformers import CrossEncoder
-model = ST("all-MiniLM-L6-v2")
-reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+model = ST(EMBEDDING_MODEL)
+reranker = CrossEncoder(RERANKER_MODEL)
 import pickle
 import numpy as np
 import json 
@@ -19,12 +23,20 @@ class RAGResponse(BaseModel):
     model_config = ConfigDict(strict=True)
 
 
-def ask(query, fused, client,document_id):
-    
-    key = f"{document_id}:{query}"
-    hashed_key = hashlib.sha256(key.encode()).hexdigest()
-    
-    cache_collection = get_collection("query_cache")
+# Same strings passed to Groq. Config reports these, not a separate copy.
+ANSWER_MODEL = "openai/gpt-oss-120b"
+EXPANSION_MODEL = "openai/gpt-oss-20b"
+DENSE_TOP_K = 10
+SPARSE_TOP_K = 10
+RRF_TOP_N = 10
+CHUNKS_PASSED_TO_LLM = 3
+
+
+def ask(query, fused, client, document_id, temperature=None, use_cache=True):
+    if use_cache:
+        key = f"{document_id}:{query}"
+        hashed_key = hashlib.sha256(key.encode()).hexdigest()
+        cache_collection = get_collection("query_cache")
 
     instructions = ("\nAnswer the question using only the provided context. "
         "If the context does not contain enough information, respond exactly with 'I don't know'. "
@@ -59,11 +71,13 @@ def ask(query, fused, client,document_id):
     message = "Instructions :\n" + instructions + "\n Context :" + currentContext + "\n Question : \n" +query
     messages = [{"role": "user", "content": message}]
 
-    response = client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=messages,
-        stream=False,
-        response_format = {
+    # temperature is left unset so Groq's default stays in effect.
+    # An eval caller can pass temperature=0; the route does not.
+    completion_args = {
+        "model": ANSWER_MODEL,
+        "messages": messages,
+        "stream": False,
+        "response_format": {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "rag_answer",
@@ -90,8 +104,11 @@ def ask(query, fused, client,document_id):
                         "additionalProperties": False
                     }
                 }
-            }
-    )
+            },
+    }
+    if temperature is not None:
+        completion_args["temperature"] = temperature
+    response = client.chat.completions.create(**completion_args)
 
     full_answer = ""
     result = json.loads(response.choices[0].message.content)
@@ -112,15 +129,16 @@ def ask(query, fused, client,document_id):
         citation_chunks.append(chunk)
     
 
-    cache_collection.add(
-        ids=[hashed_key],
-        documents=[answer],
-        metadatas=[{
-            "query": query,
-            "document_id": document_id,
-            "sources": json.dumps(chunks_results)
-        }]
-    )
+    if use_cache:
+        cache_collection.add(
+            ids=[hashed_key],
+            documents=[answer],
+            metadatas=[{
+                "query": query,
+                "document_id": document_id,
+                "sources": json.dumps(chunks_results)
+            }]
+        )
 
     return answer, citation_chunks
 
@@ -135,7 +153,7 @@ def query_chromadb(question, document_id,session_id):
     collection = get_collection("documents")
     result = collection.query(
         query_embeddings=query_embedding,
-        n_results=10,
+        n_results=DENSE_TOP_K,
         where={
             "$and": [
             {"session_id": {"$eq": session_id}},
@@ -152,13 +170,13 @@ def query_sparse(query_tokens,document_id):
         bm25 = bm25_chunksObject["bm25"]
         chunks = bm25_chunksObject["chunks"]
     scores = bm25.get_scores(query_tokens)
-    top_k_indices = np.argsort(scores)[::-1][:10]
+    top_k_indices = np.argsort(scores)[::-1][:SPARSE_TOP_K]
     top_k_chunks = [chunks[i] for i in top_k_indices]
 
     return top_k_chunks
 
 
-def rrf(dense_results,sparse_chunks,k=60,top_n=10):
+def rrf(dense_results,sparse_chunks,k=60,top_n=RRF_TOP_N):
 
     scores = {}
 
@@ -180,11 +198,12 @@ def rerank(pairs):
     scores = reranker.predict(pairs)
     return scores
 
-def query_expansion(user_query,client) -> list[str]:
+def query_expansion(user_query, client, temperature=None) -> list[str]:
 
-    response = client.chat.completions.create(
-        model="openai/gpt-oss-20b",
-        messages=[
+    # temperature is omitted unless the caller sets it, same as the answer call.
+    completion_args = {
+        "model": EXPANSION_MODEL,
+        "messages": [
             {"role": "system", "content": """
                 You are a query expansion model for a RAG retrieval system.
 
@@ -204,7 +223,7 @@ def query_expansion(user_query,client) -> list[str]:
                 "content": user_query,
             },
         ],
-        response_format={
+        "response_format": {
             "type": "json_schema",
             "json_schema": {
                 "name": "query_expansion",
@@ -223,11 +242,178 @@ def query_expansion(user_query,client) -> list[str]:
                     "additionalProperties": False
                 }
             }
-        }
-    )
+        },
+    }
+    if temperature is not None:
+        completion_args["temperature"] = temperature
+    response = client.chat.completions.create(**completion_args)
 
     result = json.loads(response.choices[0].message.content or "{}")
     return result["expanded_queries"]
+
+
+def _call_config(temperature, use_cache, chunks_retrieved, chunks_passed_to_llm):
+    return {
+        "answer_model": ANSWER_MODEL,
+        "expansion_model": EXPANSION_MODEL,
+        "temperature": temperature,
+        "use_cache": use_cache,
+        "chunks_retrieved": chunks_retrieved,
+        "chunks_passed_to_llm": chunks_passed_to_llm,
+    }
+
+
+def answer_question(query, document_id, client, session_id, temperature=None, use_cache=True):
+    """Cache lookup, then the same retrieve -> rerank -> ask path as POST /query.
+
+    session_id is the cookie value. The route reads the cookie; this function does not.
+    temperature is omitted from both Groq calls unless it is set. use_cache defaults
+    to the current read-then-write behavior.
+    """
+    if use_cache:
+        key = f"{document_id}:{query}"
+        hashed_key = hashlib.sha256(key.encode()).hexdigest()
+        cache_collection = get_collection("query_cache")
+
+        result = cache_collection.get(ids=[hashed_key])
+        if result["ids"]:
+            answer = result["documents"][0]
+            # Scores are not stored in the cache. The route still streams the original
+            # source objects from cached_metadatas, unchanged.
+            context_chunks = None
+            try:
+                sources = json.loads(result["metadatas"][0]["sources"])
+                context_chunks = [
+                    {
+                        "sectionNumber": chunk.get("sectionNumber"),
+                        "chunkNumber": chunk.get("chunkNumber"),
+                        "score": None,
+                        "chunk_text": chunk.get("chunk_text"),
+                    }
+                    for chunk in sources
+                ]
+            except Exception:
+                context_chunks = None
+            return {
+                "answer": answer,
+                "context_chunks": context_chunks,
+                "citations": None,
+                "from_cache": True,
+                "cached_metadatas": result["metadatas"],
+                # This call did not retrieve or call the LLM.
+                "config": _call_config(temperature, use_cache, 0, 0),
+            }
+
+    queries = [query] + query_expansion(query, client, temperature=temperature)
+
+    dense_results = []
+    sparse_results = []
+    for q in queries:
+        dense_results.append(query_chromadb(
+            q,
+            document_id,
+            session_id
+        ))
+        query_tokens = q.split()
+        sparse_results.append(query_sparse(query_tokens, document_id))
+
+    fused_results = []
+    for dense_result, sparse_result in zip(dense_results, sparse_results):
+        fused = rrf(dense_result, sparse_result)
+        fused_results.append(fused)
+
+    best_ranks = {}
+
+    for fused in fused_results:
+        for rank, (chunk_id, score) in enumerate(fused, start=1):
+
+            if chunk_id not in best_ranks:
+                best_ranks[chunk_id] = rank
+            else:
+                best_ranks[chunk_id] = min(best_ranks[chunk_id], rank)
+
+    # Unique chunk ids that entered reranking. That is the retrieved set.
+    chunks_retrieved = len(best_ranks)
+
+    chunks = {}
+
+    for dense_result in dense_results:
+        for i, item_id in enumerate(dense_result["ids"][0]):
+            metadata = dense_result["metadatas"][0][i]
+
+            chunks[item_id] = {
+                "chunk_text": dense_result["documents"][0][i],
+                "startPage": metadata["startPage"],
+                "endPage": metadata["endPage"],
+                "chunkNumber": metadata["chunkNumber"],
+                "sectionNumber": metadata["sectionNumber"],
+                "heading": metadata["heading"]
+            }
+
+    for result_sparse in sparse_results:
+        for item in result_sparse:
+            chunks[item["id"]] = item
+
+    pairs = []
+    candidate_ids = []
+
+    for item_id, rank in best_ranks.items():
+        chunk_text = chunks[item_id]["chunk_text"]
+
+        candidate_ids.append(item_id)
+        pairs.append((query, chunk_text))
+
+    rerank_scores = rerank(pairs)
+
+    re_paired = list(zip(rerank_scores, pairs, candidate_ids))
+
+    top_3 = sorted(
+        re_paired,
+        key=lambda x: x[0],
+        reverse=True
+    )[:CHUNKS_PASSED_TO_LLM]
+
+    reranked_fused = []
+
+    for score, pair, candidate_id in top_3:
+        reranked_fused.append({
+            "id": candidate_id,
+            "score": score,
+            "chunk": chunks[candidate_id]
+        })
+
+    answer, citation_chunks = ask(
+        query,
+        reranked_fused,
+        client,
+        document_id,
+        temperature=temperature,
+        use_cache=use_cache,
+    )
+
+    context_chunks = []
+    for item in reranked_fused:
+        chunk = item["chunk"]
+        context_chunks.append({
+            "sectionNumber": chunk["sectionNumber"],
+            "chunkNumber": chunk["chunkNumber"],
+            "score": float(item["score"]),
+            "chunk_text": chunk["chunk_text"],
+        })
+
+    return {
+        "answer": answer,
+        "context_chunks": context_chunks,
+        "citations": citation_chunks,
+        "from_cache": False,
+        # CHUNKS_PASSED_TO_LLM is the cap. Count the list actually passed.
+        "config": _call_config(
+            temperature,
+            use_cache,
+            chunks_retrieved,
+            len(reranked_fused),
+        ),
+    }
 
 
 def create_chromadb_params(chunks):

@@ -1,0 +1,239 @@
+{
+  "rubric_version": "1.0",
+  "dataset_path": "evaluation/golden_dataset.json",
+  "document_id": "ea44a068-352a-4ed2-b9d5-51dd629f58cf",
+  "question_count": 20,
+  "answerable_count": 18,
+  "unanswerable_count": 2,
+  "scale": {
+    "min": 1,
+    "max": 5
+  },
+  "dimensions_are_independent": true,
+  "correctness": {
+    "description": "Whether the answer gives the correct factual answer to the question according to the golden reference answer and the evidence in the dataset.",
+    "judge_against": [
+      "reference_answer",
+      "evidence quotes combined across every evidence entry",
+      "corpus_note",
+      "do_not_credit"
+    ],
+    "do_not_judge_against": [
+      "retrieved context alone",
+      "knowledge from outside this corpus"
+    ],
+    "scores": [
+      {
+        "score": 5,
+        "definition": "Fully factually correct. Answers the actual question. No substantive factual errors or contradictions."
+      },
+      {
+        "score": 4,
+        "definition": "Correct overall. Only minor imprecision that does not change the meaning or the answer."
+      },
+      {
+        "score": 3,
+        "definition": "The main answer is correct, but there is a meaningful factual error, omission, or imprecision."
+      },
+      {
+        "score": 2,
+        "definition": "Contains some correct information, but has a major factual error or misunderstanding that affects the answer."
+      },
+      {
+        "score": 1,
+        "definition": "Fundamentally incorrect, contradicts the reference or evidence, answers a different question, or is mostly fabricated."
+      }
+    ],
+    "rules": [
+      "Do not reward outside knowledge that this evaluation corpus does not support.",
+      "Respect do_not_credit on the individual dataset entry. A claim listed there cannot raise the score and should lower it when the answer asserts that claim.",
+      "When evidence has more than one quote or chunk, judge the answer against the combined reference and evidence.",
+      "When the stored evidence is truncated, do not treat claims past the end of the stored text as correct.",
+      "A correct refusal on an unanswerable question is factually correct. An invented number, age, or other unsupported fact is incorrect."
+    ]
+  },
+  "completeness": {
+    "description": "Whether the answer contains the important information required by the reference answer for this question.",
+    "judge_against": [
+      "reference_answer",
+      "the parts of the question the reference answer actually covers"
+    ],
+    "scores": [
+      {
+        "score": 5,
+        "definition": "Includes all important required facts and details."
+      },
+      {
+        "score": 4,
+        "definition": "Includes essentially all important information, with only a minor omission."
+      },
+      {
+        "score": 3,
+        "definition": "Gives the main answer but misses one or more important details."
+      },
+      {
+        "score": 2,
+        "definition": "Includes some required information but omits major parts of the expected answer."
+      },
+      {
+        "score": 1,
+        "definition": "Misses most of the required information or fails to answer the question."
+      }
+    ],
+    "rules": [
+      "Completeness depends on the actual question. Do not require details that are in the source but are not part of this reference answer.",
+      "For multi-part and multi-chunk questions, count every important part represented in the reference answer.",
+      "Do not penalize an answer for leaving out information the corpus itself does not establish.",
+      "On an unanswerable question, a clear statement that the document does not contain the information is the complete answer. Do not require a fabricated fact."
+    ]
+  },
+  "relevance": {
+    "description": "Whether the answer directly addresses the user's question.",
+    "judge_against": [
+      "the question",
+      "whether the content of the answer stays on that question"
+    ],
+    "scores": [
+      {
+        "score": 5,
+        "definition": "Direct, focused, and contains only relevant information."
+      },
+      {
+        "score": 4,
+        "definition": "Direct and relevant, with very minor unnecessary information."
+      },
+      {
+        "score": 3,
+        "definition": "Answers the question but includes some unnecessary or tangential material."
+      },
+      {
+        "score": 2,
+        "definition": "Contains substantial irrelevant material and only partially addresses the question."
+      },
+      {
+        "score": 1,
+        "definition": "Mostly unrelated, evasive, or fails to address the question."
+      }
+    ],
+    "rules": [
+      "Relevance is about whether the answer addresses the question, not whether every claim is true.",
+      "A clear refusal that the requested fact is not in the document still addresses an unanswerable question.",
+      "Extra true details from elsewhere in the corpus are tangential when the question did not ask for them."
+    ]
+  },
+  "faithfulness": {
+    "description": "Whether the factual claims in the answer are supported by the retrieved context supplied to the generator.",
+    "judge_against": [
+      "retrieved context only"
+    ],
+    "do_not_judge_against": [
+      "golden evidence",
+      "reference answer",
+      "outside knowledge"
+    ],
+    "scores": [
+      {
+        "score": 5,
+        "definition": "Every factual claim is supported by the retrieved context. No unsupported or contradictory claims."
+      },
+      {
+        "score": 4,
+        "definition": "Nearly all claims are supported. Only a minor unsupported detail exists."
+      },
+      {
+        "score": 3,
+        "definition": "Most claims are supported, but at least one meaningful claim is not clearly supported."
+      },
+      {
+        "score": 2,
+        "definition": "Several important claims are unsupported or contradict the retrieved context."
+      },
+      {
+        "score": 1,
+        "definition": "The answer is predominantly unsupported by, or contradicts, the retrieved context."
+      }
+    ],
+    "rules": [
+      "Use only the retrieved context passed to the generator.",
+      "Do not use golden evidence to make an unsupported answer look faithful.",
+      "An answer can match the golden reference and still score low here when the retrieved context did not contain the supporting information.",
+      "An answer can be faithful to the retrieved context and still be incorrect relative to the reference answer.",
+      "If the retrieved context does not contain the requested fact, a response that does not invent that fact is faithful. A specific invented fact is not."
+    ]
+  },
+  "unanswerable_guidance": {
+    "applies_when": "dataset item answerable is false",
+    "item_ids": [19, 20],
+    "reference_behavior": "The dataset reference answer is \"I don't know\". The LLM judge should accept any clear statement that the requested information cannot be determined from the provided documents.",
+    "exact_string_check": "Do not require the exact string \"I don't know\" in this rubric. Exact-output checking belongs in the evaluation runner.",
+    "must_not": [
+      "Invent a companion count for the first trip to Ta'if (item 19). Mut'im's sons and nephews are a later return toward Mecca, and the corpus gives no number.",
+      "Invent or infer Muhammad's age at Ta'if (item 20). The year 619 is not an age. \"The first age\" in the rabbis' question is not Muhammad's age."
+    ],
+    "scoring": {
+      "correctness": "A clear non-fabricating refusal scores high. An invented number or age scores low.",
+      "completeness": "The refusal is the required answer. Do not mark it incomplete for lacking a number or age.",
+      "relevance": "A refusal that responds to the question is relevant. An answer about a different event is not.",
+      "faithfulness": "Score only against the retrieved context. A refusal is faithful when that context does not state the fact. An invented fact is unfaithful unless that same fact is actually present in the retrieved context."
+    }
+  },
+  "general_evaluation_instructions": [
+    "Score all four dimensions separately. Do not collapse them into one score.",
+    "This rubric covers the 20 questions in evaluation/golden_dataset.json for document ea44a068-352a-4ed2-b9d5-51dd629f58cf.",
+    "Read the dataset item being scored, including reference_answer, evidence, corpus_note, do_not_credit, and answerable.",
+    "Evidence is a list. Some items have one quote, some have several quotes from the same chunk, and some have quotes from different chunks. Never assume one supporting chunk.",
+    "Retrieval rank is not ground truth. The evidence fields name the chunks that contain the fact even when a retriever ranked a different chunk first.",
+    "Credit only what this corpus supports. Information that may be true outside the document does not increase correctness or completeness.",
+    "Apply corpus_note and do_not_credit whenever the item has them.",
+    "For faithfulness, ignore the golden evidence and judge the answer only against the retrieved context from that run."
+  ],
+  "judge_instructions": {
+    "correctness_versus_faithfulness": "Correctness asks whether the answer matches the golden reference and corpus evidence. Faithfulness asks whether each claim in the answer is supported by the retrieved context from that run. These can diverge. A right answer drawn from outside the retrieved context is correct and unfaithful. A wrong answer that stays inside a bad retrieved context is faithful and incorrect.",
+    "completeness_versus_correctness": "Correctness asks whether what was said is factually right. Completeness asks whether the important parts of the reference answer are present. A short right answer can be correct and incomplete. Extra unsupported detail can make an otherwise complete answer less correct.",
+    "relevance_is_separate": "Relevance asks only whether the answer addresses the question without drifting. It does not measure factual accuracy or support in the retrieved context.",
+    "dataset_specific_rules": [
+      "Combine every evidence quote before judging correctness and completeness. Item 10 needs both the Satanic Verses account in section 3 chunk 1 and the next-day retraction in section 3 chunk 2. Item 16 needs both the journey and mockery in section 5 chunk 1 and the secrecy, stoning, and escape in section 5 chunk 2.",
+      "Item 7 has two quotes from the same chunk. Completeness still needs both the persecution reason and the 615 departure to Aksum under Aṣḥama ibn Abjar.",
+      "Item 3: 15 days of silence and Gabriel's later arrival are separate. Do not credit \"the answers arrived after exactly 15 days\" or \"Gabriel came on the fifteenth day.\"",
+      "Item 8: keep \"only one migration,\" \"two sets,\" \"majority,\" and the timing before and after the Hijrah. Dropping \"before the Hijrah\" is a meaningful loss of the comparison.",
+      "Item 9: score Watt's claim as the corpus states it: the episodes were more complex, there were divisions in the embryonic community, and they likely went to trade. Do not require or prefer a softer \"may have\" wording.",
+      "Item 10: the passage says Muhammad was said to have been given false verses by Satan, and that he retracted them the next day. \"Later\" is weaker than \"the next day.\"",
+      "Item 15: Abu Lahab was initially willing to provide protection and then withdrew his support. Do not require a story of a separate completed offer.",
+      "Item 18: section 5 chunk 3 ends at \"to accompany Muhammad to.\" Credit Akhnas's refusal, Suhayl's refusal, and Mut'im's agreement and escort. Do not credit \"Muhammad successfully entered Mecca under Mut'im's protection.\"",
+      "Items 19 and 20 are unanswerable. Do not credit a companion count or an exact age, including an age inferred from 619 or from outside knowledge.",
+      "Do not require the exact words \"I don't know\" when judging. A clear statement that the document does not contain the information is enough for the LLM judge."
+    ]
+  },
+  "special_cases": [
+    {
+      "item_ids": [10, 16],
+      "kind": "multi_chunk_evidence",
+      "instruction": "Judge correctness and completeness against the combined evidence. Missing the facts that live only in the second chunk is an incomplete answer."
+    },
+    {
+      "item_ids": [7],
+      "kind": "multiple_quotes_one_chunk",
+      "instruction": "Two evidence quotes share section 3 chunk 1. The reference still has two required parts: persecution, and the move to Aksum under Aṣḥama ibn Abjar."
+    },
+    {
+      "item_ids": [18],
+      "kind": "truncated_evidence",
+      "instruction": "The stored chunk is cut off. Do not reward claims about a completed entry into Mecca."
+    },
+    {
+      "item_ids": [3, 18, 19, 20],
+      "kind": "do_not_credit",
+      "instruction": "Apply the item's do_not_credit list. Those claims must not be treated as supported answers."
+    },
+    {
+      "item_ids": [19, 20],
+      "kind": "unanswerable",
+      "instruction": "The corpus does not contain the requested fact. A non-fabricating refusal is the correct and complete answer."
+    },
+    {
+      "item_ids": [3, 8, 9, 10, 15, 18, 19, 20],
+      "kind": "corpus_note",
+      "instruction": "Read corpus_note before scoring. It records the boundary between what the chunk says and what a looser paraphrase would add."
+    }
+  ]
+}

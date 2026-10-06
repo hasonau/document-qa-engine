@@ -45,3 +45,15 @@ learning/local-guides/
 
 # LinkedIn screenshot captures (keep local)
 linkedin-screenshots/
+
+# Evaluation: keep evaluation/ and golden_dataset.json tracked.
+# Ignore private dumps, generated outputs, logs/caches, and local indexes only.
+evaluation/chunks_dump.txt
+evaluation/results/
+evaluation/logs/
+evaluation/cache/
+evaluation/source_documents/
+evaluation/extracted/
+
+# Generated BM25 indexes (source chunks + index)
+bm25_*.pkl

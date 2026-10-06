@@ -1,0 +1,419 @@
+{
+  "name": "Golden Evaluation Dataset",
+  "document_id": "ea44a068-352a-4ed2-b9d5-51dd629f58cf",
+  "corpus": "Muhammad's persecution, the Abyssinia migration, the Quraysh questions, Ta'if, and the related events stored for this document.",
+  "purpose": "Evaluate retrieval and answer generation on factual, multi-detail, chronological, comparison, and unanswerable questions.",
+  "evaluation_principle": "A reference answer is only what this corpus supports. Do not credit an answer for adding information that may be true outside this document.",
+  "answer_rule": "Answer using only the provided context. If the context does not contain the information, the expected answer is exactly \"I don't know\".",
+  "verified_against": {
+    "chunks_dump": "evaluation/chunks_dump.txt",
+    "chunk_source": "bm25_ea44a068-352a-4ed2-b9d5-51dd629f58cf.pkl",
+    "chunk_count": 9,
+    "retrieval_check": "Project BM25 (whitespace tokens, same get_scores path as query_sparse) was run for every question. Evidence below is the chunk that contains the fact, including where BM25 ranked a different chunk first."
+  },
+  "coverage": {
+    "total": 20,
+    "answerable": 18,
+    "unanswerable": 2,
+    "by_type": {
+      "factual": 8,
+      "specific detail": 2,
+      "reasoning": 1,
+      "comparison": 2,
+      "multi-detail": 2,
+      "causal": 2,
+      "multi-step reasoning": 1
+    }
+  },
+  "items": [
+    {
+      "id": 1,
+      "title": "Abu Talib's Response",
+      "question": "What did Abu Talib tell Muhammad after Muhammad said he would not stop even if the sun were placed in his right hand and the moon in his left?",
+      "type": "factual",
+      "answerable": true,
+      "reference_answer": "Abu Talib called him back and said, \"Come back nephew, say what you please, for by God I will never give you up on any account.\"",
+      "evidence": [
+        {
+          "heading": "Default Heading",
+          "section_number": 1,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 0,
+          "quote": "When he turned around, Abu Talib called him and said, \"Come back nephew, say what you please, for by God I will never give you up on any account.\""
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Questions from the Jewish Rabbis",
+      "question": "What three questions did the Jewish rabbis advise the Quraysh delegation to ask Muhammad?",
+      "type": "factual",
+      "answerable": true,
+      "reference_answer": "They advised the Quraysh to ask Muhammad to recount the tale of young men who ventured forth in the first age, narrate the story of a traveler who reached both the eastern and western ends of the earth, and provide details about the spirit.",
+      "evidence": [
+        {
+          "heading": "Quraysh delegation to Yathrib",
+          "section_number": 2,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 0,
+          "quote": "The rabbis advised them to ask Muhammad three questions: recount the tale of young men who ventured forth in the first age; narrate the story of a traveler who reached both the eastern and western ends of the earth; and provide details about the spirit."
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Delayed Response",
+      "question": "How long did Muhammad wait before receiving the answers to the three questions?",
+      "type": "specific detail",
+      "answerable": true,
+      "reference_answer": "He told them he would answer the next day, but 15 days passed without a response from his God. The passage does not say the answers arrived at the end of those 15 days. At some point later, Gabriel came and provided the answers.",
+      "corpus_note": "The 15 days and Gabriel's arrival are separate. Fifteen days of silence is supported. Claiming that Gabriel came when those 15 days ended is not.",
+      "do_not_credit": [
+        "The answers arrived after exactly 15 days.",
+        "Gabriel came on the fifteenth day."
+      ],
+      "evidence": [
+        {
+          "heading": "Quraysh delegation to Yathrib",
+          "section_number": 2,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 0,
+          "quote": "However, 15 days passed without a response from his God, leading to gossip among the Meccans and causing Muhammad distress. At some point later, the angel Gabriel came to Muhammad and provided him with the answers."
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "The First Question",
+      "question": "How does the Quranic account answer the question about the group of young men who ventured forth?",
+      "type": "factual",
+      "answerable": true,
+      "reference_answer": "The Quran tells of a group of men sleeping in a cave (Quran 18:9–25). Scholars generally link that story to the legend of the Seven Sleepers of Ephesus.",
+      "evidence": [
+        {
+          "heading": "Quraysh delegation to Yathrib",
+          "section_number": 2,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 0,
+          "quote": "In response to the first query, the Quran tells a story about a group of men sleeping in a cave (Quran 18:9–25), which scholars generally link to the legend of the Seven Sleepers of Ephesus."
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Dhu al-Qarnayn",
+      "question": "Which Quranic figure is associated with the question about the traveler who reached both the eastern and western ends of the earth?",
+      "type": "factual",
+      "answerable": true,
+      "reference_answer": "Dhu al-Qarnayn, literally \"he of the two horns,\" in Quran 18:93–99.",
+      "evidence": [
+        {
+          "heading": "Quraysh delegation to Yathrib",
+          "section_number": 2,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 0,
+          "quote": "For the second query, the Quran speaks of Dhu al-Qarnayn, literally 'he of the two horns' (Quran 18:93–99)"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "The Spirit",
+      "question": "What was the Quranic response concerning the nature of the spirit?",
+      "type": "factual",
+      "answerable": true,
+      "reference_answer": "The Quranic revelation asserted that the nature of the spirit was beyond human comprehension.",
+      "evidence": [
+        {
+          "heading": "Quraysh delegation to Yathrib",
+          "section_number": 2,
+          "chunk_number": 2,
+          "start_page": 0,
+          "end_page": 0,
+          "quote": "As for the third query, concerning the nature of the spirit, the Quranic revelation asserted that it was beyond human comprehension."
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Abyssinian Migration",
+      "question": "Why did Muhammad send some of his followers to the Kingdom of Aksum?",
+      "type": "reasoning",
+      "answerable": true,
+      "reference_answer": "The accounts agree that persecution played a major role. In 615 he sent some followers to the Abyssinian Kingdom of Aksum, where they found a small colony under the protection of the Christian Ethiopian emperor Aṣḥama ibn Abjar.",
+      "evidence": [
+        {
+          "heading": "Migration to Abyssinia",
+          "section_number": 3,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 1,
+          "quote": "In 615, Muhammad sent some of his followers to emigrate to the Abyssinian Kingdom of Aksum and found a small colony under the protection of the Christian Ethiopian emperor Aṣḥama ibn Abjar.[55]"
+        },
+        {
+          "heading": "Migration to Abyssinia",
+          "section_number": 3,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 1,
+          "quote": "These accounts agree that persecution played a major role in Muhammad sending them there."
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Two Migrations",
+      "question": "How did Ibn Sa'd's account differ from the accounts of Tabari and Ibn Hisham regarding migration to Abyssinia?",
+      "type": "comparison",
+      "answerable": true,
+      "reference_answer": "Tabari and Ibn Hisham mentioned only one migration to Abyssinia. Ibn Sa'd described two sets. The majority of the first group returned to Mecca before the Hijrah. The majority of the second group remained in Abyssinia at that time and went directly to Medina after the Hijrah.",
+      "corpus_note": "The chunk says \"only one migration\" and \"two sets,\" and it times the returns against the Hijrah. \"Most of the first group later returned\" drops both \"majority\" and \"before the event of Hijrah.\"",
+      "evidence": [
+        {
+          "heading": "Migration to Abyssinia",
+          "section_number": 3,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 1,
+          "quote": "While Tabari and Ibn Hisham mentioned only one migration to Abyssinia, there were two sets according to Ibn Sa'd. Of these two, the majority of the first group returned to Mecca before the event of Hijrah, while the majority of the second group remained in Abyssinia at the time and went directly to Medina after the event of Hijrah."
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Alternative Interpretation",
+      "question": "What alternative explanation did W. Montgomery Watt propose for the migration to Abyssinia?",
+      "type": "specific detail",
+      "answerable": true,
+      "reference_answer": "Watt said the episodes were more complex than the traditional accounts suggest. He proposes that there were divisions within the embryonic Muslim community, and that they likely went there to trade in competition with the prominent merchant families of Mecca.",
+      "corpus_note": "Watt's proposal is not hedged as \"some followers may have.\" The chunk says the episodes were more complex, that there were divisions in the embryonic community, and that they likely went there to trade.",
+      "evidence": [
+        {
+          "heading": "Migration to Abyssinia",
+          "section_number": 3,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 1,
+          "quote": "According to W. Montgomery Watt, the episodes were more complex than the traditional accounts suggest; he proposes that there were divisions within the embryonic Muslim community, and that they likely went there to trade in competition with the prominent merchant families of Mecca."
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Satanic Verses Incident",
+      "question": "According to the passage, what happened in the incident commonly called the \"Satanic Verses\" incident?",
+      "type": "multi-detail",
+      "answerable": true,
+      "reference_answer": "The passage says Muhammad was said to have been given false verses by Satan acknowledging pre-Islamic pagan goddesses. That led to a reconciliation with the Meccans, and word was sent to the Muslims in Abyssinia to return. The next day he retracted and abrogated the verses at the behest of fresh divine revelation from Gabriel.",
+      "corpus_note": "The chunk says he \"was said to have been given false verses by Satan,\" and that he retracted them \"the next day,\" not merely later.",
+      "evidence": [
+        {
+          "heading": "Migration to Abyssinia",
+          "section_number": 3,
+          "chunk_number": 1,
+          "start_page": 0,
+          "end_page": 1,
+          "quote": "Muhammad was said to have been given false verses by Satan acknowledging pre-Islamic pagan goddesses. This led to a reconciliation between Muhammad and the Meccans, and word was sent to the Muslims in Abyssinia to return home."
+        },
+        {
+          "heading": "Migration to Abyssinia",
+          "section_number": 3,
+          "chunk_number": 2,
+          "start_page": 0,
+          "end_page": 1,
+          "quote": "However, the next day, Muhammad retracted and abrogated the verses at the behest of fresh divine revelation from Gabriel."
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Scholarly Disagreement",
+      "question": "Was the historical authenticity of the Satanic Verses incident universally accepted by modern scholars?",
+      "type": "comparison",
+      "answerable": true,
+      "reference_answer": "No. By the 20th century, Muslim scholars had unanimously rejected the incident. Western scholars have both posited reasons for its potential veracity and questioned its veracity.",
+      "evidence": [
+        {
+          "heading": "Migration to Abyssinia",
+          "section_number": 3,
+          "chunk_number": 2,
+          "start_page": 0,
+          "end_page": 1,
+          "quote": "By the 20th century, Muslim scholars had unanimously rejected this incident.[134] Western scholars have both posited reasons for its potential veracity,[133] and questioned its veracity.[138]"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Ban on Banu Hashim",
+      "question": "What restrictions did the Quraysh impose on the Banu Hashim in 616?",
+      "type": "factual",
+      "answerable": true,
+      "reference_answer": "In 616 the other Quraysh clans agreed to prohibit trade and marriage with the Banu Hashim. Banu Hashim members could still move around Mecca freely.",
+      "evidence": [
+        {
+          "heading": "Social exclusion of the Banu Hashim",
+          "section_number": 4,
+          "chunk_number": 1,
+          "start_page": 1,
+          "end_page": 1,
+          "quote": "In 616, an agreement was established whereby all other Quraysh clans were to enforce a ban on the Banu Hashim, prohibiting trade and marriage with them.[139][140] Nevertheless, Banu Hashim members could still move around Mecca freely."
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Ending the Sanctions",
+      "question": "What eventually led to the lifting of the sanctions against the Banu Hashim?",
+      "type": "causal",
+      "answerable": true,
+      "reference_answer": "A faction within Quraysh that sympathized with the Banu Hashim began efforts to end the sanctions. That produced a general consensus in 619 to lift the ban.",
+      "evidence": [
+        {
+          "heading": "Social exclusion of the Banu Hashim",
+          "section_number": 4,
+          "chunk_number": 1,
+          "start_page": 1,
+          "end_page": 1,
+          "quote": "At a later point, a faction within Quraysh, sympathizing with Banu Hashim, initiated efforts to end the sanctions, resulting in a general consensus in 619 to lift the ban."
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Year of Sorrow",
+      "question": "Which two important people died in 619, causing a major period of sorrow for Muhammad?",
+      "type": "factual",
+      "answerable": true,
+      "reference_answer": "His wife Khadija and his uncle and guardian Abu Talib. Both died in 619, the year the passage calls a period of sorrow for Muhammad.",
+      "evidence": [
+        {
+          "heading": "Attempt to establish himself in Ta'if",
+          "section_number": 5,
+          "chunk_number": 1,
+          "start_page": 1,
+          "end_page": 1,
+          "quote": "In 619, Muhammad faced a period of sorrow. His wife, Khadija, a crucial source of his financial and emotional support, died.[143] In the same year, his uncle and guardian, Abu Talib, also died.[144][145]"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Abu Lahab",
+      "question": "Why did Abu Lahab withdraw his protection of Muhammad?",
+      "type": "causal",
+      "answerable": true,
+      "reference_answer": "Abu Lahab was initially willing to provide Muhammad with protection. He withdrew his support after hearing Muhammad say that Abu Talib and Abd al-Muttalib were destined for hell because they did not believe in Islam.",
+      "corpus_note": "The chunk says he was \"initially willing to provide\" protection and then \"withdrew his support.\" It does not narrate a separate completed offer.",
+      "evidence": [
+        {
+          "heading": "Attempt to establish himself in Ta'if",
+          "section_number": 5,
+          "chunk_number": 1,
+          "start_page": 1,
+          "end_page": 1,
+          "quote": "Muhammad's other uncle, Abu Lahab, who succeeded the Banu Hashim clan leadership, was initially willing to provide Muhammad with protection. However, upon hearing from Muhammad that Abu Talib and Abd al-Muttalib were destined for hell due to not believing in Islam, he withdrew his support."
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Ta'if",
+      "question": "What happened when Muhammad went to Ta'if seeking aid and protection?",
+      "type": "multi-detail",
+      "answerable": true,
+      "reference_answer": "He went to Ta'if to gain aid and protection against the Meccans. The people mocked his claim to prophethood, asking why a prophet would need their help and insulting him as a weak, fatherless orphan. He asked them to keep the matter secret, fearing it would embolden the Quraysh. Instead they pelted him with stones, injuring his limbs, and he escaped to the garden of Utbah ibn Rabi'ah.",
+      "evidence": [
+        {
+          "heading": "Attempt to establish himself in Ta'if",
+          "section_number": 5,
+          "chunk_number": 1,
+          "start_page": 1,
+          "end_page": 1,
+          "quote": "Muhammad then went to Ta'if to try to establish himself in the city and gain aid and protection against the Meccans,[148][133][149] but he was met with a response: \"If you are truly a prophet, what need do you have of our help?"
+        },
+        {
+          "heading": "Attempt to establish himself in Ta'if",
+          "section_number": 5,
+          "chunk_number": 2,
+          "start_page": 1,
+          "end_page": 1,
+          "quote": "Muhammad asked the people of Ta'if to keep the matter a secret, fearing that this would embolden the hostility of the Quraysh against him. However, instead of accepting his request, they pelted him with stones, injuring his limbs.[151] He eventually evaded this chaos and persecution by escaping to the garden of Utbah ibn Rabi'ah"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Addas",
+      "question": "Who offered Muhammad grapes after he escaped to the garden, and what was significant about their encounter?",
+      "type": "factual",
+      "answerable": true,
+      "reference_answer": "Addas, the Christian slave of Utbah ibn Rabi'ah, offered him grapes, and Muhammad accepted. By the end of the encounter Addas was overwhelmed and kissed Muhammad's head, hands, and feet in recognition of his prophethood.",
+      "evidence": [
+        {
+          "heading": "Attempt to establish himself in Ta'if",
+          "section_number": 5,
+          "chunk_number": 2,
+          "start_page": 1,
+          "end_page": 1,
+          "quote": "Utbah's Christian slave Addas stopped by and offered grapes, which Muhammad accepted. By the end of the encounter, Addas felt overwhelmed and kissed Muhammad's head, hands, and feet in recognition of his prophethood."
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Returning to Mecca",
+      "question": "Who ultimately agreed to provide Muhammad with protection when he needed help entering Mecca after returning from Ta'if?",
+      "type": "multi-step reasoning",
+      "answerable": true,
+      "reference_answer": "Akhnas ibn Shariq declined, saying he was only a confederate of the house of Quraysh. Suhayl ibn Amir declined on the basis of tribal principle. Mut'im ibn 'Adiy, chief of the Banu Nawfal, agreed and rode out in the morning with his sons and nephews to accompany Muhammad. The stored passage ends there.",
+      "corpus_note": "Section 5 chunk 3 is cut off at \"to accompany Muhammad to.\" Credit Mut'im's agreement and the escort. Do not credit a claim that Muhammad completed his entry into Mecca.",
+      "do_not_credit": [
+        "Muhammad successfully entered Mecca under Mut'im's protection."
+      ],
+      "evidence": [
+        {
+          "heading": "Attempt to establish himself in Ta'if",
+          "section_number": 5,
+          "chunk_number": 3,
+          "start_page": 1,
+          "end_page": 1,
+          "quote": "But Akhnas declined, saying that he was only a confederate of the house of Quraysh. Muhammad then sent a message to Suhayl ibn Amir, who similarly declined on the basis of tribal principle. Finally, Muhammad dispatched someone to ask Mut'im ibn 'Adiy, the chief of the Banu Nawfal. Mut'im agreed, and after equipping himself, he rode out in the morning with his sons and nephews to accompany Muhammad to"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Unanswerable — Unsupported Detail",
+      "question": "How many people accompanied Muhammad when he first traveled to Ta'if?",
+      "type": "unanswerable",
+      "answerable": false,
+      "reference_answer": "I don't know",
+      "expected_behavior": "The passage does not provide this information. The system should say that the information is not available rather than inventing a number. The pipeline instruction expects exactly \"I don't know\".",
+      "corpus_note": "The Ta'if section says Muhammad went to Ta'if and does not give a companion count. Mut'im's sons and nephews appear later, on the return toward Mecca, and no number is given there either.",
+      "do_not_credit": [
+        "Any specific number of companions on the first trip to Ta'if."
+      ],
+      "evidence": []
+    },
+    {
+      "id": 20,
+      "title": "Unanswerable — Unsupported Detail",
+      "question": "What was the exact age of Muhammad when he went to Ta'if?",
+      "type": "unanswerable",
+      "answerable": false,
+      "reference_answer": "I don't know",
+      "expected_behavior": "The passage does not state his age. The system should say that the information is not available rather than infer or invent an age. The pipeline instruction expects exactly \"I don't know\".",
+      "corpus_note": "619 is the year of the journey, not his age. The only use of \"age\" in the corpus is \"the first age\" in the rabbis' question about the young men.",
+      "do_not_credit": [
+        "Any exact age inferred from the year 619 or from knowledge outside this document."
+      ],
+      "evidence": []
+    }
+  ]
+}

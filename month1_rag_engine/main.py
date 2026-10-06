@@ -95,11 +95,13 @@ def detect_sections(dictionary_for_pages):
 
     return sections,headingDetected
 
+maxChunkLength = 200
+overlap = 30
+
+
 def fixed_size_chunking(section_text):
     words = section_text.split()
     chunks = []
-    maxChunkLength = 200
-    overlap = 30
     i = 0
     while i < len(words):
         chunk = words[i:i+maxChunkLength]

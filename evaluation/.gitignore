@@ -1,0 +1,8 @@
+# Private / generated artifacts only.
+# Do not ignore golden_dataset.json or this directory.
+chunks_dump.txt
+results/
+logs/
+cache/
+source_documents/
+extracted/
