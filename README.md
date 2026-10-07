@@ -1,4 +1,4 @@
-# document-qa-engine
+p# document-qa-engine
 
 An AI Document Assistant: a RAG system that supports multi-document PDF upload, structure-aware chunking (heading detection with a headerless-document fallback), hybrid search (dense + BM25 fused with RRF), and cross-encoder reranking. It is exposed as a FastAPI service with streaming SSE answers and a React chat UI.
 
@@ -54,6 +54,7 @@ Query path: session cookie required → dense Chroma query (filtered by `session
 - **Streaming SSE responses** — `/query` yields `answer` tokens, then a `sources` JSON payload
 - **Structure-aware chunking** — heading detection, then per-section fixed-size splits; documents with no detected headings fall back to one synthetic `"Full Document"` section and the same `chunk_sections()` path
 - **Source metadata in context** — the prompt includes section heading, page range, and chunk number
+- **Offline evaluation harness** — golden set, raw run runner, and retrieval metrics under `evaluation/` (LLM judge not built yet)
 
 ---
 
@@ -96,6 +97,61 @@ Open the URL Vite prints (usually [http://localhost:5173](http://localhost:5173)
 > Note: this repo path contains `&`, which breaks Windows `vite.cmd` shims. Frontend scripts call Vite via `node` instead.
 
 Month 1 notebooks and the CLI still use their own setup (FAISS, Jupyter); see the Month 1 section below.
+
+---
+
+## Evaluation
+
+Offline harness under `evaluation/`. It calls the same `answer_question` path as production (not the HTTP route), saves raw results, then scores retrieval against the golden evidence. The LLM judge is not built yet.
+
+| File | Role |
+| --- | --- |
+| `evaluation/golden_dataset.json` | 20 questions on one document (18 answerable, 2 unanswerable; 9 chunks) |
+| `evaluation/rubrics.json` | Four dimensions (correctness, completeness, relevance, faithfulness); judge not implemented |
+| `evaluation/run_eval.py` | Runner: executes questions, writes `evaluation/results/run_<timestamp>.json` |
+| `evaluation/retrieval_metrics.py` | Hit@1 / Hit@k / recall / MRR, plus unanswerable "I don't know" check |
+
+### How to run
+
+From the repo root, with the project venv and a `.env` that contains `GROQ_API_KEY`:
+
+```powershell
+# Dense retrieval filters Chroma by session_id + document_id.
+# Read session_id from the documents collection metadata for the golden document_id.
+# Do not commit the real value.
+$env:EVAL_SESSION_ID = "<session_id from Chroma chunk metadata>"
+
+.\.venv\Scripts\python.exe evaluation/run_eval.py --limit 1
+.\.venv\Scripts\python.exe evaluation/run_eval.py --delay 1
+.\.venv\Scripts\python.exe evaluation/retrieval_metrics.py evaluation/results/run_<timestamp>.json
+```
+
+The runner uses `temperature=0` and `use_cache=False`. Each run file stores a config snapshot (models, temperature, cache flag, chunk counts, named top-k constants), `git_commit`, and `git_dirty`. Results under `evaluation/results/` are gitignored.
+
+### Baseline results
+
+Run `run_20261007_103939` at commit `1e554548d56d8d851918907e811f0ea304d778bd` (`git_dirty`: false). Of 20 questions, 2 answers failed (items 17 and 18). Retrieval metrics cover the 16 answerable questions without errors:
+
+| Metric | Value |
+| --- | --- |
+| Hit@1 | 0.938 |
+| Hit@k | 1.000 |
+| Recall | 1.000 |
+| MRR | 0.969 |
+| Chance Hit@1 (`1/N`) | 0.111 |
+| Chance Hit@k (`k/N`) | 0.333 |
+
+`N` = 9 chunks; mean `k` = 3. Both unanswerable questions answered `I don't know`.
+
+### Limitations and known issues
+
+- Metrics are saturated on this 9-chunk single-document corpus (Hit@k 1.0), so they cannot show whether reranking or query expansion helps.
+- Evaluation covers one document only. Multi-document evaluation is not done.
+- The LLM judge (correctness, faithfulness, and the other rubric dimensions) is not built yet.
+- Items 17 and 18 failed with Groq `json_validate_failed` and an empty `failed_generation` on a strict `json_schema` call. The failing stage (answer vs query expansion) is unconfirmed. Failed rows saved no retrieved chunks, because the runner stores nulls on any exception.
+- A wrong `EVAL_SESSION_ID` does not raise an error: dense search can return nothing while BM25 still returns chunks, so the pipeline becomes BM25-only. The runner records per-retriever counts and stops if the first successful call has `dense_chunks_returned == 0`.
+
+Technical notes: `findings/day23-eval-notes.md`.
 
 ---
 
@@ -252,3 +308,43 @@ Full write-up with per-question analysis in [`month1-rag-engine/13.Evaluation/EV
 - **Decision:** A. `answer_question` in `month2_api_service/services/rag.py` is the pipeline. The route only checks the session cookie and shapes the existing HTTP response. One function is the production path, so the code under evaluation is the code that serves requests, and a script can call it without HTTP.
 - **Rejected:** B would make a second copy of retrieval that can drift from production. C keeps the pipeline behind a cookie and the old response, which still dropped scores and did not expose the exact chunks passed to the LLM.
 - **Consequences:** The route and a future runner share one path. `context_chunks` carries section number, chunk number, rerank score, and full text for every chunk passed to the LLM, in rank order, so faithfulness can be checked against that context. The HTTP body is unchanged: a cache hit is still an SSE `answer` event plus a `sources` event, and a cache miss is still `{"answer", "citations"}`. Cache writes still happen inside `ask`. Scores from a cache hit are not available, because the cache never stored them.
+
+**Evaluation design: separate stages, fixed generation settings, config per run**
+
+- **Context:** Offline evaluation needs raw answers and the exact chunks passed to the LLM, without going through HTTP or the query cache.
+- **Options considered:** (A) one script that runs questions, scores retrieval, and judges answers together; (B) separate runner, metrics, and (later) judge stages; (C) call the HTTP `/query` route from the eval script.
+- **Decision:** B. `evaluation/run_eval.py` only executes questions and writes a run file. `evaluation/retrieval_metrics.py` scores retrieval offline. Rubrics live in `evaluation/rubrics.json`; the LLM judge is not built yet. The runner calls `answer_question` with `temperature=0` and `use_cache=False`, and each run file stores a config snapshot plus `git_commit` / `git_dirty`.
+- **Rejected:** A mixes failure modes and makes partial re-runs harder. C keeps session cookies and response shaping in the path and still drops scores on the HTTP body.
+- **Consequences:** Retrieval can be scored without a judge. Generation settings for a baseline run are fixed and recorded. Failed calls and unanswerable checks stay visible next to the metrics.
+
+**Named constants for pipeline settings**
+
+- **Context:** Top-k values, model names, and chunk size lived as literals or were only partly exposed, so a run file could not record what the pipeline actually used without guessing.
+- **Options considered:** (A) leave literals and write `"unknown"` in the run config; (B) name the settings as importable constants and read them into the run file; (C) copy numbers into the runner by hand.
+- **Decision:** B. `month2_api_service/services/rag.py` and `month1_rag_engine/main.py` expose named constants (`EMBEDDING_MODEL`, `RERANKER_MODEL`, `DENSE_TOP_K`, `SPARSE_TOP_K`, `RRF_TOP_N`, `CHUNKS_PASSED_TO_LLM`, `maxChunkLength`, `overlap`). The runner imports those values into the run config.
+- **Rejected:** A loses reproducibility. C can drift from production.
+- **Consequences:** Each run file records the settings that were imported from code. Changing a constant changes both the pipeline and the next run's config.
+
+**Silent BM25 fallback and dense-count guard**
+
+- **Context:** Dense Chroma queries filter on `session_id` and `document_id`. BM25 loads `bm25_{document_id}.pkl` and does not use `session_id`. A wrong `EVAL_SESSION_ID` therefore returns no dense hits while sparse retrieval still works.
+- **Options considered:** (A) treat empty dense results as a hard error inside `query_chromadb`; (B) record per-retriever counts on the eval config and abort the run if the first success has `dense_chunks_returned == 0`; (C) ignore the mismatch and score hybrid as usual.
+- **Decision:** B for the offline runner. Production retrieval behavior is unchanged. The runner prints that the session id is probably wrong and that the run would measure BM25 only.
+- **Rejected:** A would change production query behavior. C would publish hybrid metrics for a BM25-only path.
+- **Consequences:** A bad session id fails the eval run early. Hybrid metrics are not claimed when dense retrieval returned nothing.
+
+**Saturated retrieval metrics on a 9-chunk corpus**
+
+- **Context:** Baseline retrieval metrics on the golden document reached Hit@k 1.000, Hit@1 0.938, recall 1.000, and MRR 0.969 (16 answerable questions; chance Hit@k 0.333 with N=9 and k=3).
+- **Options considered:** (A) treat these numbers as proof that reranking and query expansion help; (B) report them as a baseline and note that the metric is saturated on this corpus; (C) drop Hit@k because it cannot move.
+- **Decision:** B. Keep the metrics, publish the chance baseline, and plan a larger multi-document eval set where misses remain possible.
+- **Rejected:** A overclaims. C throws away a useful check for total retrieval failure.
+- **Consequences:** This run cannot show whether reranking or query expansion improved ranking. Multi-document evaluation is not done yet.
+
+**Failure accounting next to metrics**
+
+- **Context:** Items 17 and 18 failed during generation (Groq `json_validate_failed`). Excluding them from retrieval averages without saying so would make the harness look cleaner than the run.
+- **Options considered:** (A) drop failed rows quietly from all reporting; (B) exclude them from retrieval means (no saved `context_chunks`) but list them as exclusions with the error text, and keep the 2/20 answer-failure count in the run summary; (C) retry until every row succeeds before scoring.
+- **Decision:** B. Retrieval metrics are computed only over answerable rows without errors. Exclusions and the raw run's error fields remain part of the report.
+- **Rejected:** A hides reliability problems. C blocks scoring when Groq rejects a structured output.
+- **Consequences:** Hit@k 1.0 does not mean 20/20 answers succeeded. Failed answers stay visible beside the retrieval totals.
