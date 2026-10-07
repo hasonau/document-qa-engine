@@ -252,7 +252,14 @@ def query_expansion(user_query, client, temperature=None) -> list[str]:
     return result["expanded_queries"]
 
 
-def _call_config(temperature, use_cache, chunks_retrieved, chunks_passed_to_llm):
+def _call_config(
+    temperature,
+    use_cache,
+    chunks_retrieved,
+    chunks_passed_to_llm,
+    dense_chunks_returned,
+    sparse_chunks_returned,
+):
     return {
         "answer_model": ANSWER_MODEL,
         "expansion_model": EXPANSION_MODEL,
@@ -260,6 +267,8 @@ def _call_config(temperature, use_cache, chunks_retrieved, chunks_passed_to_llm)
         "use_cache": use_cache,
         "chunks_retrieved": chunks_retrieved,
         "chunks_passed_to_llm": chunks_passed_to_llm,
+        "dense_chunks_returned": dense_chunks_returned,
+        "sparse_chunks_returned": sparse_chunks_returned,
     }
 
 
@@ -301,7 +310,7 @@ def answer_question(query, document_id, client, session_id, temperature=None, us
                 "from_cache": True,
                 "cached_metadatas": result["metadatas"],
                 # This call did not retrieve or call the LLM.
-                "config": _call_config(temperature, use_cache, 0, 0),
+                "config": _call_config(temperature, use_cache, 0, 0, 0, 0),
             }
 
     queries = [query] + query_expansion(query, client, temperature=temperature)
@@ -316,6 +325,10 @@ def answer_question(query, document_id, client, session_id, temperature=None, us
         ))
         query_tokens = q.split()
         sparse_results.append(query_sparse(query_tokens, document_id))
+
+    # Lengths of the lists each retriever returned, before RRF sees them.
+    dense_chunks_returned = sum(len(result["ids"][0]) for result in dense_results)
+    sparse_chunks_returned = sum(len(result) for result in sparse_results)
 
     fused_results = []
     for dense_result, sparse_result in zip(dense_results, sparse_results):
@@ -412,6 +425,8 @@ def answer_question(query, document_id, client, session_id, temperature=None, us
             use_cache,
             chunks_retrieved,
             len(reranked_fused),
+            dense_chunks_returned,
+            sparse_chunks_returned,
         ),
     }
 
