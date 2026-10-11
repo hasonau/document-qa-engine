@@ -123,35 +123,34 @@ $env:EVAL_SESSION_ID = "<session_id from Chroma chunk metadata>"
 
 .\.venv\Scripts\python.exe evaluation/run_eval.py --limit 1
 .\.venv\Scripts\python.exe evaluation/run_eval.py --delay 1
+.\.venv\Scripts\python.exe evaluation/run_eval.py --ids 17 18 --temperature default --delay 1
+.\.venv\Scripts\python.exe evaluation/run_eval.py --temperature default --delay 1
 .\.venv\Scripts\python.exe evaluation/retrieval_metrics.py evaluation/results/run_<timestamp>.json
 ```
 
-The runner uses `temperature=0` and `use_cache=False`. Each run file stores a config snapshot (models, temperature, cache flag, chunk counts, named top-k constants), `git_commit`, and `git_dirty`. Results under `evaluation/results/` are gitignored.
+The runner defaults to `temperature=0` and always uses `use_cache=False`. Pass `--temperature default` to omit temperature like `POST /query`. Each run file stores a config snapshot (models, temperature, cache flag, chunk counts, expansion flags, named top-k constants), `git_commit`, and `git_dirty`. Per-question rows include `expansion_failed` and `expansion_attempts`. Results under `evaluation/results/` are gitignored.
 
 ### Baseline results
 
-Run `run_20261007_103939` at commit `1e554548d56d8d851918907e811f0ea304d778bd` (`git_dirty`: false). Of 20 questions, 2 answers failed (items 17 and 18). Retrieval metrics cover the 16 answerable questions without errors:
+**Day 23** — `run_20261007_103939` at commit `1e554548d56d8d851918907e811f0ea304d778bd` (`git_dirty`: false). Of 20 questions, 2 answers failed (items 17 and 18). Retrieval metrics covered 16 answerable questions without errors: Hit@1 0.938, Hit@k 1.000, recall 1.000, MRR 0.969 (chance Hit@1 0.111, chance Hit@k 0.333 with N=9, mean k=3). Both unanswerable questions answered `I don't know`.
 
-| Metric | Value |
-| --- | --- |
-| Hit@1 | 0.938 |
-| Hit@k | 1.000 |
-| Recall | 1.000 |
-| MRR | 0.969 |
-| Chance Hit@1 (`1/N`) | 0.111 |
-| Chance Hit@k (`k/N`) | 0.333 |
-
-`N` = 9 chunks; mean `k` = 3. Both unanswerable questions answered `I don't know`.
+**Updated baseline (default temperature)** — `run_20261011_130503` scored all 18 answerable questions (items 17 and 18 succeeded on that run): Hit@1 0.944, Hit@k 1.000, recall 1.000, MRR 0.972; unanswerable 2 of 2. A later post-change run `run_20261011_131637` matched those retrieval numbers with answer success 20 of 20 and `expansion_failed=false` on every row (no live retry/fallback). Because the expansion failure is intermittent, a clean run does not prove the fail-soft path.
 
 ### Limitations and known issues
 
 - Metrics are saturated on this 9-chunk single-document corpus (Hit@k 1.0), so they cannot show whether reranking or query expansion helps.
 - Evaluation covers one document only. Multi-document evaluation is not done.
-- The LLM judge (correctness, faithfulness, and the other rubric dimensions) is not built yet.
-- Items 17 and 18 failed with Groq `json_validate_failed` and an empty `failed_generation` on a strict `json_schema` call. The failing stage (answer vs query expansion) is unconfirmed. Failed rows saved no retrieved chunks, because the runner stores nulls on any exception.
+- The LLM judge (correctness, completeness, relevance, faithfulness) is not built yet.
+- Ablation runs are not done.
+- **Expansion stage finding (Day 24):** labelled re-runs of items 17 and 18 at default temperature saw 2 of 16 item-calls fail with Groq `json_validate_failed` (empty `failed_generation`); both failures were at `query_expansion`, none at `ask`. Failures also appeared at temperature `0` in earlier sweeps (flaky, not temperature-only).
+- **Fail-soft expansion (stub-verified):** on expansion failure the pipeline retries once (~1s), then continues with the original query only and records `expansion_failed` / `expansion_attempts`. Verified with stubs only. Confirm live by watching those fields on future runs. Do not treat a clean 20/20 as proof.
+- On any raised exception the runner still stores nulls for answer fields, including `context_chunks`. For the expansion failures above, retrieval had not run yet, so there were no chunks to keep.
+- Keeping retrieved chunks when the **answer** (`ask`) call fails is not implemented (0 of 16 labelled diagnostic failures were at `ask`; revisit if it appears).
+- Why the 20b expansion model intermittently fails structured JSON is still unconfirmed.
 - A wrong `EVAL_SESSION_ID` does not raise an error: dense search can return nothing while BM25 still returns chunks, so the pipeline becomes BM25-only. The runner records per-retriever counts and stops if the first successful call has `dense_chunks_returned == 0`.
+- PowerShell `ConvertFrom-Json` can mishandle duplicate keys; run config has both `chunks_passed_to_llm` and `CHUNKS_PASSED_TO_LLM` — prefer Python `json.load` when inspecting run files.
 
-Technical notes: `findings/day23-eval-notes.md`.
+Technical notes: `findings/day23-eval-notes.md`. Day 24 short summary: `evaluation/CHANGELOG_CURSOR.md` (local / gitignored).
 
 ---
 
@@ -343,8 +342,24 @@ Full write-up with per-question analysis in [`month1-rag-engine/13.Evaluation/EV
 
 **Failure accounting next to metrics**
 
-- **Context:** Items 17 and 18 failed during generation (Groq `json_validate_failed`). Excluding them from retrieval averages without saying so would make the harness look cleaner than the run.
-- **Options considered:** (A) drop failed rows quietly from all reporting; (B) exclude them from retrieval means (no saved `context_chunks`) but list them as exclusions with the error text, and keep the 2/20 answer-failure count in the run summary; (C) retry until every row succeeds before scoring.
-- **Decision:** B. Retrieval metrics are computed only over answerable rows without errors. Exclusions and the raw run's error fields remain part of the report.
+- **Context:** Items 17 and 18 failed with Groq `json_validate_failed` during Day 23. Excluding them from retrieval averages without saying so would make the harness look cleaner than the run. (Day 24 later showed those labelled failures were at query expansion, before retrieval — see Decision Log entries below. The runner still stores nulls on any raised exception.)
+- **Options considered:** (A) drop failed rows quietly from all reporting; (B) exclude them from retrieval means when `context_chunks` are absent, but list them as exclusions with the error text, and keep the answer-failure count visible; (C) retry until every row succeeds before scoring.
+- **Decision:** B. Retrieval metrics are computed only over answerable rows without errors. Exclusions and the raw run's error fields remain part of the report. Day 24 also prints `Answer success: X of Y` next to the metrics.
 - **Rejected:** A hides reliability problems. C blocks scoring when Groq rejects a structured output.
 - **Consequences:** Hit@k 1.0 does not mean 20/20 answers succeeded. Failed answers stay visible beside the retrieval totals.
+
+**Graceful degradation for query expansion (Day 24)**
+
+- **Context:** Labelled re-runs showed intermittent Groq `json_validate_failed` on the optional `query_expansion` call (`gpt-oss-20b`), not on the answer call. Raising aborted the whole question even though retrieval could still use the original query.
+- **Options considered:** (A) do nothing; (B) retry once then still raise; (C) retry once then fall back to the original query only; (D) change temperature/prompts/models/schemas. Option C with visible flags was chosen by Claude on Umair’s behalf (Umair was short on time and did not pick among the options himself).
+- **Decision:** C. `_query_expansion_with_retry` tries twice (~1s sleep), then returns no expansions; `answer_question` continues. `ask` failures still raise. Production temperature, prompts, models, and schemas unchanged. Success HTTP body of `POST /query` unchanged.
+- **Rejected:** A leaves flaky 500s for an optional step. D was out of scope without a confirmed root cause. Changing ask behavior was rejected (0 of 16 labelled failures were at `ask`).
+- **Consequences:** Users may get an answer without expanded queries after a double expansion failure. Stub-verified only; live confirmation is watching `expansion_failed` / `expansion_attempts` on future runs. A clean 20/20 does not prove the path fired.
+
+**Visible fallbacks in eval config (Day 24)**
+
+- **Context:** A silent fallback would hide that retrieval ran without expansion and make metrics hard to interpret.
+- **Options considered:** (A) fail soft with no signal; (B) log only; (C) record `expansion_failed` and `expansion_attempts` on the call config and each eval result row, and print counts in the runner/metrics summaries.
+- **Decision:** C (with logging). Cache hits record `false` / `0`. Metrics print `Ran without expansion` only when the field exists so older run files still work.
+- **Rejected:** A and B alone are not enough for offline comparison across runs.
+- **Consequences:** Run JSON shows when a question continued without expansion. Operators can correlate that flag with retrieval scores later.

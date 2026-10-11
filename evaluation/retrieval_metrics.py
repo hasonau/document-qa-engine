@@ -166,12 +166,13 @@ def mean(values):
 def evaluate(dataset, run):
     by_id = {item["id"]: item for item in dataset["items"]}
     n_chunks = corpus_chunk_count(dataset)
+    results = run["results"]
 
     evaluated = []
     exclusions = []
     unanswerable_checks = []
 
-    for result in run["results"]:
+    for result in results:
         item_id = result["id"]
         item = by_id.get(item_id)
         if item is None:
@@ -221,9 +222,21 @@ def evaluate(dataset, run):
     rrs = [row["reciprocal_rank"] for row in evaluated]
     mean_k = mean([row["k"] for row in evaluated])
 
+    answer_success = sum(1 for row in results if row.get("error") is None)
+    answer_total = len(results)
+    # Older run files omit expansion_failed; leave unset so the report skips that line.
+    ran_without_expansion = None
+    if any("expansion_failed" in row for row in results):
+        ran_without_expansion = sum(
+            1 for row in results if row.get("expansion_failed") is True
+        )
+
     totals = {
         "items_evaluated": len(evaluated),
         "items_excluded": len(exclusions),
+        "answer_success": answer_success,
+        "answer_total": answer_total,
+        "ran_without_expansion": ran_without_expansion,
         "mean_hit_at_1": mean(hit1),
         "mean_hit_at_k": mean(hitk),
         "mean_recall": mean(recalls),
@@ -259,6 +272,11 @@ def print_report(report):
     print()
     print(f"Items evaluated: {totals['items_evaluated']}")
     print(f"Items excluded: {totals['items_excluded']}")
+    print(
+        f"Answer success: {totals['answer_success']} of {totals['answer_total']}"
+    )
+    if totals.get("ran_without_expansion") is not None:
+        print(f"Ran without expansion: {totals['ran_without_expansion']}")
     for exclusion in report["exclusions"]:
         print(
             f"  exclude id={exclusion['id']} reason={exclusion['reason']}: "

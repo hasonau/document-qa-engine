@@ -9,9 +9,13 @@ model = ST(EMBEDDING_MODEL)
 reranker = CrossEncoder(RERANKER_MODEL)
 import pickle
 import numpy as np
-import json 
+import json
 import hashlib
+import logging
+import time
 from pydantic import BaseModel, ConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Citation(BaseModel):
@@ -265,6 +269,8 @@ def _call_config(
     chunks_passed_to_llm,
     dense_chunks_returned,
     sparse_chunks_returned,
+    expansion_failed=False,
+    expansion_attempts=0,
 ):
     return {
         "answer_model": ANSWER_MODEL,
@@ -275,7 +281,31 @@ def _call_config(
         "chunks_passed_to_llm": chunks_passed_to_llm,
         "dense_chunks_returned": dense_chunks_returned,
         "sparse_chunks_returned": sparse_chunks_returned,
+        "expansion_failed": expansion_failed,
+        "expansion_attempts": expansion_attempts,
     }
+
+
+def _query_expansion_with_retry(query, client, temperature=None):
+    """Try query_expansion up to twice. On total failure, return no expansions.
+
+    Returns (expanded_queries, expansion_failed, expansion_attempts).
+    ask() failures are not handled here.
+    """
+    last_error = None
+    for attempt in range(1, 3):
+        try:
+            expanded = query_expansion(query, client, temperature=temperature)
+            return expanded, False, attempt
+        except Exception as e:
+            last_error = e
+            # Stage prefix is already on RuntimeError from the create wrapper.
+            logger.warning("%s", str(e)[:100])
+            if attempt < 2:
+                time.sleep(1)
+    # Both attempts failed: fail soft so retrieval can still use the original query.
+    assert last_error is not None
+    return [], True, 2
 
 
 def answer_question(query, document_id, client, session_id, temperature=None, use_cache=True):
@@ -284,6 +314,10 @@ def answer_question(query, document_id, client, session_id, temperature=None, us
     session_id is the cookie value. The route reads the cookie; this function does not.
     temperature is omitted from both Groq calls unless it is set. use_cache defaults
     to the current read-then-write behavior.
+
+    query_expansion is retried once on failure; if both attempts fail, retrieval
+    continues with the original query only (expansion_failed=True in config).
+    ask failures still raise.
     """
     if use_cache:
         key = f"{document_id}:{query}"
@@ -319,7 +353,10 @@ def answer_question(query, document_id, client, session_id, temperature=None, us
                 "config": _call_config(temperature, use_cache, 0, 0, 0, 0),
             }
 
-    queries = [query] + query_expansion(query, client, temperature=temperature)
+    expanded, expansion_failed, expansion_attempts = _query_expansion_with_retry(
+        query, client, temperature=temperature
+    )
+    queries = [query] + expanded
 
     dense_results = []
     sparse_results = []
@@ -433,6 +470,8 @@ def answer_question(query, document_id, client, session_id, temperature=None, us
             len(reranked_fused),
             dense_chunks_returned,
             sparse_chunks_returned,
+            expansion_failed=expansion_failed,
+            expansion_attempts=expansion_attempts,
         ),
     }
 

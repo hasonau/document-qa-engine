@@ -130,6 +130,8 @@ def question_record(
     from_cache,
     dense_chunks_returned,
     sparse_chunks_returned,
+    expansion_failed,
+    expansion_attempts,
     error,
 ):
     return {
@@ -143,6 +145,8 @@ def question_record(
         "from_cache": from_cache,
         "dense_chunks_returned": dense_chunks_returned,
         "sparse_chunks_returned": sparse_chunks_returned,
+        "expansion_failed": expansion_failed,
+        "expansion_attempts": expansion_attempts,
         "latency_seconds": latency,
         "error": error,
         "timestamp": datetime.now().astimezone().isoformat(),
@@ -194,6 +198,8 @@ def run_questions(items, document_id, client, session_id, delay, temperature=Non
                 result["from_cache"],
                 call_config["dense_chunks_returned"],
                 call_config["sparse_chunks_returned"],
+                call_config["expansion_failed"],
+                call_config["expansion_attempts"],
                 None,
             )
         except Exception as exc:
@@ -202,6 +208,8 @@ def run_questions(items, document_id, client, session_id, delay, temperature=Non
             record = question_record(
                 item,
                 latency,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -258,8 +266,10 @@ def write_run(path, dataset_question_count, results, first_config, temperature):
 
 def print_summary(path, results):
     errors = sum(row["error"] is not None for row in results)
+    without_expansion = sum(row.get("expansion_failed") is True for row in results)
     print(f"Questions run: {len(results)}")
     print(f"Errors: {errors}")
+    print(f"Questions run without expansion: {without_expansion}")
     if results:
         average = sum(row["latency_seconds"] for row in results) / len(results)
         print(f"Average latency: {average:.3f} seconds")
