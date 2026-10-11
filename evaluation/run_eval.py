@@ -162,8 +162,11 @@ def run_config(call_config):
     return config
 
 
-def run_questions(items, document_id, client, session_id, delay):
-    """Execute items. Stop after 3 consecutive errors, or after a first success with no dense hits."""
+def run_questions(items, document_id, client, session_id, delay, temperature=None):
+    """Execute items. Stop after 3 consecutive errors, or after a first success with no dense hits.
+
+    temperature is forwarded to answer_question. None means omit it (route behavior).
+    """
     results = []
     streak = []
     first_config = None
@@ -177,7 +180,7 @@ def run_questions(items, document_id, client, session_id, delay):
                 document_id,
                 client,
                 session_id,
-                temperature=0,
+                temperature=temperature,
                 use_cache=False,
             )
             latency = round(time.perf_counter() - started, 6)
@@ -232,15 +235,18 @@ def run_questions(items, document_id, client, session_id, delay):
     return results, first_config
 
 
-def write_run(path, dataset_question_count, results, first_config):
+def write_run(path, dataset_question_count, results, first_config, temperature):
+    """Write the run file. temperature is always stored (0 or null), even if every item failed."""
     commit, dirty = git_snapshot()
+    config = run_config(first_config)
+    config["temperature"] = temperature
     payload = {
         "run_id": path.stem,
         "dataset_path": DATASET_PATH.as_posix(),
         "dataset_question_count": dataset_question_count,
         "git_commit": commit,
         "git_dirty": dirty,
-        "config": run_config(first_config),
+        "config": config,
         "results": results,
     }
     path.write_text(
@@ -273,6 +279,23 @@ def parse_args(argv):
         help="Run only the first N questions.",
     )
     parser.add_argument(
+        "--ids",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="ID",
+        help="Run only these item ids (dataset order). Example: --ids 17 18",
+    )
+    parser.add_argument(
+        "--temperature",
+        choices=["0", "default"],
+        default="0",
+        help=(
+            "0: pass temperature=0 to answer_question (runner default, prior behavior). "
+            "default: omit temperature like POST /query."
+        ),
+    )
+    parser.add_argument(
         "--delay",
         type=float,
         default=0,
@@ -284,6 +307,16 @@ def parse_args(argv):
     if args.delay < 0:
         parser.error("--delay must be 0 or greater")
     return args
+
+
+def select_items(items, ids):
+    """Keep dataset order. Error if any requested id is missing."""
+    available = {item["id"] for item in items}
+    missing = sorted({item_id for item_id in ids if item_id not in available})
+    if missing:
+        raise SystemExit(f"Unknown item id(s): {missing}")
+    wanted = set(ids)
+    return [item for item in items if item["id"] in wanted]
 
 
 def main(argv=None):
@@ -306,8 +339,13 @@ def main(argv=None):
     client = Groq(api_key=api_key)
     document_id, items = load_dataset()
     dataset_question_count = len(items)
+    if args.ids is not None:
+        items = select_items(items, args.ids)
     if args.limit is not None:
         items = items[: args.limit]
+
+    # "default" -> None so answer_question omits the Groq argument (route behavior).
+    temperature = 0 if args.temperature == "0" else None
 
     results, first_config = run_questions(
         items,
@@ -315,9 +353,10 @@ def main(argv=None):
         client,
         session_id,
         args.delay,
+        temperature=temperature,
     )
     path = results_path(datetime.now().strftime("%Y%m%d_%H%M%S"))
-    write_run(path, dataset_question_count, results, first_config)
+    write_run(path, dataset_question_count, results, first_config, temperature)
     print_summary(path, results)
 
 

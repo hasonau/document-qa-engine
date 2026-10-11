@@ -108,7 +108,10 @@ def ask(query, fused, client, document_id, temperature=None, use_cache=True):
     }
     if temperature is not None:
         completion_args["temperature"] = temperature
-    response = client.chat.completions.create(**completion_args)
+    try:
+        response = client.chat.completions.create(**completion_args)
+    except Exception as e:
+        raise RuntimeError(f"ask: {e}") from e
 
     full_answer = ""
     result = json.loads(response.choices[0].message.content)
@@ -246,7 +249,10 @@ def query_expansion(user_query, client, temperature=None) -> list[str]:
     }
     if temperature is not None:
         completion_args["temperature"] = temperature
-    response = client.chat.completions.create(**completion_args)
+    try:
+        response = client.chat.completions.create(**completion_args)
+    except Exception as e:
+        raise RuntimeError(f"query_expansion: {e}") from e
 
     result = json.loads(response.choices[0].message.content or "{}")
     return result["expanded_queries"]
