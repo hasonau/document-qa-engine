@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
 const API_BASE = "http://localhost:8000";
@@ -17,6 +17,14 @@ async function readErrorDetail(res, fallback) {
     if (typeof data.detail === "string" && data.detail.trim()) {
       return data.detail;
     }
+    if (data.detail && typeof data.detail === "object") {
+      const d = data.detail;
+      if (typeof d.message === "string") {
+        const failed = d.failed ? ` (failed at ${d.failed})` : "";
+        return `${d.message}${failed}`;
+      }
+      return JSON.stringify(d);
+    }
     if (Array.isArray(data.detail) && data.detail.length > 0) {
       return data.detail
         .map((item) => item.msg ?? JSON.stringify(item))
@@ -26,6 +34,15 @@ async function readErrorDetail(res, fallback) {
     // non-JSON body
   }
   return fallback;
+}
+
+function formatUploadedAt(iso) {
+  if (!iso) return "Unknown upload time";
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
 }
 
 /** Parse SSE frames from a POST /query ReadableStream. */
@@ -110,6 +127,53 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [documentId, setDocumentId] = useState(null);
   const [streaming, setStreaming] = useState(false);
+
+  const [documents, setDocuments] = useState([]);
+  const [kbLoading, setKbLoading] = useState(false);
+  const [kbError, setKbError] = useState("");
+  const [kbBusyId, setKbBusyId] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const reuploadInputRef = useRef(null);
+  const reuploadTargetIdRef = useRef(null);
+
+  const busy = uploading || streaming || kbBusyId !== null;
+
+  const refreshDocuments = useCallback(async () => {
+    setKbLoading(true);
+    setKbError("");
+    try {
+      const res = await fetch(`${API_BASE}/documents`, {
+        method: "GET",
+        credentials: "include",
+      });
+
+      if (res.status === 401) {
+        setDocuments([]);
+        setKbError("No session yet. Upload a document to start.");
+        return;
+      }
+
+      if (!res.ok) {
+        const detail = await readErrorDetail(
+          res,
+          `Could not load documents (${res.status})`,
+        );
+        setKbError(detail);
+        return;
+      }
+
+      const data = await res.json();
+      setDocuments(Array.isArray(data.documents) ? data.documents : []);
+    } catch {
+      setKbError("Could not reach the server. Is the API running?");
+    } finally {
+      setKbLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshDocuments();
+  }, [refreshDocuments]);
 
   async function runQuery(question) {
     const text = question.trim();
@@ -235,6 +299,26 @@ function App() {
     await runQuery(question);
   }
 
+  async function uploadFile(file) {
+    const formData = new FormData();
+    // Backend expects field name "document" (UploadFile param in /upload-document)
+    formData.append("document", file);
+
+    const res = await fetch(`${API_BASE}/upload-document`, {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const detail = await readErrorDetail(res, `Upload failed (${res.status})`);
+      throw new Error(detail);
+    }
+
+    const data = await res.json();
+    return data;
+  }
+
   async function handleUpload() {
     if (!selectedFile || uploading) return;
 
@@ -242,33 +326,113 @@ function App() {
     setUploadError(false);
     setUploadStatus("Uploading…");
 
-    const formData = new FormData();
-    // Backend expects field name "document" (UploadFile param in /upload-document)
-    formData.append("document", selectedFile);
-
     try {
-      const res = await fetch(`${API_BASE}/upload-document`, {
-        method: "POST",
-        credentials: "include",
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const detail = await readErrorDetail(res, `Upload failed (${res.status})`);
-        setUploadError(true);
-        setUploadStatus(detail);
-        return;
-      }
-
-      const data = await res.json();
+      const data = await uploadFile(selectedFile);
       if (data.document_id) setDocumentId(data.document_id);
       setUploadError(false);
       setUploadStatus(`Uploaded: ${selectedFile.name}`);
-    } catch {
+      await refreshDocuments();
+    } catch (err) {
       setUploadError(true);
-      setUploadStatus("Could not reach the server. Is the API running?");
+      setUploadStatus(
+        err instanceof Error
+          ? err.message
+          : "Could not reach the server. Is the API running?",
+      );
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function deleteDocument(targetId) {
+    const res = await fetch(
+      `${API_BASE}/documents/${encodeURIComponent(targetId)}`,
+      {
+        method: "DELETE",
+        credentials: "include",
+      },
+    );
+
+    if (res.status === 404) {
+      // Already gone — refresh list; clear active if it was this id
+      if (documentId === targetId) setDocumentId(null);
+      await refreshDocuments();
+      return { alreadyGone: true };
+    }
+
+    if (res.status === 401) {
+      throw new Error("No session. Upload a document to start.");
+    }
+
+    if (!res.ok) {
+      const detail = await readErrorDetail(
+        res,
+        `Delete failed (${res.status})`,
+      );
+      throw new Error(detail);
+    }
+
+    if (documentId === targetId) setDocumentId(null);
+    await refreshDocuments();
+    return { alreadyGone: false };
+  }
+
+  async function handleConfirmDelete() {
+    const targetId = confirmDeleteId;
+    if (!targetId || busy) return;
+
+    setConfirmDeleteId(null);
+    setKbBusyId(targetId);
+    setKbError("");
+
+    try {
+      await deleteDocument(targetId);
+    } catch (err) {
+      setKbError(
+        err instanceof Error ? err.message : "Delete failed. Try again.",
+      );
+      await refreshDocuments();
+    } finally {
+      setKbBusyId(null);
+    }
+  }
+
+  function handleReuploadClick(targetId) {
+    if (busy) return;
+    reuploadTargetIdRef.current = targetId;
+    if (reuploadInputRef.current) {
+      reuploadInputRef.current.value = "";
+      reuploadInputRef.current.click();
+    }
+  }
+
+  async function handleReuploadFileChange(e) {
+    const file = e.target.files?.[0] ?? null;
+    const targetId = reuploadTargetIdRef.current;
+    e.target.value = "";
+    reuploadTargetIdRef.current = null;
+    if (!file || !targetId || busy) return;
+
+    setKbBusyId(targetId);
+    setKbError("");
+    setUploadError(false);
+    setUploadStatus(`Re-uploading over ${file.name}…`);
+
+    try {
+      await deleteDocument(targetId);
+      const data = await uploadFile(file);
+      if (data.document_id) setDocumentId(data.document_id);
+      setUploadStatus(`Re-uploaded: ${file.name}`);
+      await refreshDocuments();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Re-upload failed. Try again.";
+      setKbError(message);
+      setUploadError(true);
+      setUploadStatus(message);
+      await refreshDocuments();
+    } finally {
+      setKbBusyId(null);
     }
   }
 
@@ -290,12 +454,12 @@ function App() {
               setUploadStatus("");
             }}
             aria-label="PDF file"
-            disabled={uploading}
+            disabled={busy}
           />
           <button
             type="button"
             onClick={handleUpload}
-            disabled={!selectedFile || uploading || streaming}
+            disabled={!selectedFile || busy}
           >
             {uploading ? "Uploading…" : "Upload"}
           </button>
@@ -308,12 +472,122 @@ function App() {
                 type="button"
                 className="retry-btn"
                 onClick={handleUpload}
-                disabled={uploading || streaming}
+                disabled={busy}
               >
                 Retry upload
               </button>
             ) : null}
           </div>
+        ) : null}
+      </section>
+
+      <section className="knowledge-base" aria-label="Knowledge base">
+        <div className="kb-header">
+          <h2>Knowledge base</h2>
+          <button
+            type="button"
+            className="retry-btn"
+            onClick={refreshDocuments}
+            disabled={busy || kbLoading}
+          >
+            {kbLoading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+
+        <input
+          ref={reuploadInputRef}
+          type="file"
+          accept=".pdf"
+          className="kb-hidden-input"
+          aria-hidden="true"
+          tabIndex={-1}
+          onChange={handleReuploadFileChange}
+        />
+
+        {kbError ? <p className="kb-error">{kbError}</p> : null}
+
+        {kbLoading && documents.length === 0 ? (
+          <p className="kb-empty">Loading documents…</p>
+        ) : null}
+
+        {!kbLoading && documents.length === 0 && !kbError ? (
+          <p className="kb-empty">No documents yet. Upload a PDF above.</p>
+        ) : null}
+
+        {documents.length > 0 ? (
+          <ul className="kb-list">
+            {documents.map((doc) => {
+              const isActive = documentId === doc.document_id;
+              const rowBusy = kbBusyId === doc.document_id;
+              const confirming = confirmDeleteId === doc.document_id;
+              return (
+                <li
+                  key={doc.document_id}
+                  className={`kb-row${isActive ? " is-active" : ""}${rowBusy ? " is-busy" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="kb-select"
+                    onClick={() => setDocumentId(doc.document_id)}
+                    disabled={busy}
+                    aria-pressed={isActive}
+                  >
+                    <span className="kb-filename">
+                      {doc.filename || "Unnamed document"}
+                    </span>
+                    <span className="kb-meta">
+                      {doc.chunk_count} chunk{doc.chunk_count === 1 ? "" : "s"}
+                      {" · "}
+                      {formatUploadedAt(doc.uploaded_at)}
+                      {isActive ? " · Active" : ""}
+                    </span>
+                  </button>
+
+                  <div className="kb-actions">
+                    {confirming ? (
+                      <>
+                        <button
+                          type="button"
+                          className="kb-danger"
+                          onClick={handleConfirmDelete}
+                          disabled={busy}
+                        >
+                          Confirm delete
+                        </button>
+                        <button
+                          type="button"
+                          className="retry-btn"
+                          onClick={() => setConfirmDeleteId(null)}
+                          disabled={busy}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="retry-btn"
+                          onClick={() => setConfirmDeleteId(doc.document_id)}
+                          disabled={busy}
+                        >
+                          {rowBusy ? "Working…" : "Delete"}
+                        </button>
+                        <button
+                          type="button"
+                          className="retry-btn"
+                          onClick={() => handleReuploadClick(doc.document_id)}
+                          disabled={busy}
+                        >
+                          Re-upload
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         ) : null}
       </section>
 
@@ -355,7 +629,7 @@ function App() {
                   type="button"
                   className="retry-btn"
                   onClick={() => handleRetryMessage(i)}
-                  disabled={streaming || uploading}
+                  disabled={busy}
                 >
                   Retry
                 </button>
@@ -370,11 +644,17 @@ function App() {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={streaming ? "Waiting for answer…" : "Ask a question..."}
+          placeholder={
+            !documentId
+              ? "Select a document above, then ask…"
+              : streaming
+                ? "Waiting for answer…"
+                : "Ask a question..."
+          }
           aria-label="Message"
-          disabled={streaming || uploading}
+          disabled={busy}
         />
-        <button type="submit" disabled={!input.trim() || streaming || uploading}>
+        <button type="submit" disabled={!input.trim() || busy || !documentId}>
           {streaming ? "…" : "Send"}
         </button>
       </form>

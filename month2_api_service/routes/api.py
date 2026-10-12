@@ -4,20 +4,27 @@ import uuid
 from month1_rag_engine import extract_pages,detect_sections,chunk_sections
 from groq import Groq
 import os
-from ..services.rag import answer_question, create_chromadb_params, save_to_chromadb
+from ..services.rag import (
+    answer_question,
+    create_chromadb_params,
+    save_to_chromadb,
+    get_collection,
+)
 from sse_starlette.sse import EventSourceResponse
 import json
 from rank_bm25 import BM25Okapi
 import pickle
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
 
 
 LOG_FILE = Path("logs/query_logs.jsonl")
+DOCUMENTS_DIR = Path("month2_api_service/documents")
+BM25_DIR = Path(".")
 
 
 def log_query(
@@ -42,6 +49,78 @@ def log_query(
         file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def require_session_id(session_id: str | None) -> str:
+    if session_id is None:
+        raise HTTPException(status_code=401, detail="No session")
+    return session_id
+
+
+def parse_document_uuid(document_id: str) -> str:
+    """Return canonical UUID string, or raise 404 for invalid ids."""
+    try:
+        return str(uuid.UUID(document_id))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+
+def _path_inside_dir(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _pdf_info_for_document(document_id: str) -> tuple[str | None, str | None]:
+    """Filename and uploaded_at ISO from disk PDF matching {document_id}_*."""
+    docs_dir = DOCUMENTS_DIR
+    if not docs_dir.is_dir():
+        return None, None
+
+    filename = None
+    uploaded_at = None
+    prefix = f"{document_id}_"
+    for candidate in docs_dir.glob(f"{document_id}_*"):
+        if not candidate.is_file():
+            continue
+        if not _path_inside_dir(candidate, docs_dir):
+            continue
+        name = candidate.name
+        if not name.startswith(prefix):
+            continue
+        filename = name[len(prefix):] or None
+        uploaded_at = datetime.fromtimestamp(
+            candidate.stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+        break
+    return filename, uploaded_at
+
+
+def _bm25_path_for_document(document_id: str) -> Path:
+    path = (BM25_DIR / f"bm25_{document_id}.pkl").resolve()
+    if not _path_inside_dir(path, BM25_DIR):
+        raise RuntimeError("BM25 path escaped expected directory")
+    return path
+
+
+def _delete_pdfs_for_document(document_id: str) -> int:
+    """Delete PDFs matching {document_id}_* inside DOCUMENTS_DIR. Returns count removed."""
+    docs_dir = DOCUMENTS_DIR
+    if not docs_dir.is_dir():
+        return 0
+
+    removed = 0
+    for candidate in list(docs_dir.glob(f"{document_id}_*")):
+        if not candidate.is_file():
+            continue
+        resolved = candidate.resolve()
+        if not _path_inside_dir(resolved, docs_dir):
+            raise RuntimeError("PDF path escaped documents folder")
+        resolved.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
 router = APIRouter()
 
 
@@ -57,6 +136,151 @@ def read_root():
 @router.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@router.get("/documents")
+def list_documents(request: Request):
+    session_id = require_session_id(request.cookies.get("session_id"))
+
+    collection = get_collection("documents")
+    result = collection.get(
+        where={"session_id": {"$eq": session_id}},
+        include=["metadatas"],
+    )
+
+    counts: dict[str, int] = {}
+    for metadata in result.get("metadatas") or []:
+        if not metadata:
+            continue
+        doc_id = metadata.get("document_id")
+        if not doc_id:
+            continue
+        counts[doc_id] = counts.get(doc_id, 0) + 1
+
+    documents = []
+    for document_id, chunk_count in sorted(counts.items()):
+        filename, uploaded_at = _pdf_info_for_document(document_id)
+        documents.append(
+            {
+                "document_id": document_id,
+                "filename": filename,
+                "chunk_count": chunk_count,
+                "uploaded_at": uploaded_at,
+            }
+        )
+
+    return {"documents": documents}
+
+
+@router.delete("/documents/{document_id}")
+def delete_document(document_id: str, request: Request):
+    session_id = require_session_id(request.cookies.get("session_id"))
+    document_id = parse_document_uuid(document_id)
+
+    documents_collection = get_collection("documents")
+    owned = documents_collection.get(
+        where={
+            "$and": [
+                {"session_id": {"$eq": session_id}},
+                {"document_id": {"$eq": document_id}},
+            ]
+        },
+        include=["metadatas"],
+    )
+    owned_ids = owned.get("ids") or []
+    if not owned_ids:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    completed: list[str] = []
+    failed_stage: str | None = None
+    error_detail: str | None = None
+    cache_deleted = 0
+    bm25_deleted = False
+    pdfs_deleted = 0
+    chroma_deleted = 0
+
+    # 1) Purge query cache (idempotent)
+    try:
+        cache_collection = get_collection("query_cache")
+        cached = cache_collection.get(
+            where={"document_id": {"$eq": document_id}},
+            include=["metadatas"],
+        )
+        cache_ids = cached.get("ids") or []
+        if cache_ids:
+            cache_collection.delete(ids=cache_ids)
+            cache_deleted = len(cache_ids)
+        completed.append("cache")
+    except Exception as e:
+        failed_stage = "cache"
+        error_detail = str(e)
+
+    # 2) Delete BM25 pickle (idempotent)
+    if failed_stage is None:
+        try:
+            bm25_path = _bm25_path_for_document(document_id)
+            if bm25_path.is_file():
+                bm25_path.unlink()
+                bm25_deleted = True
+            completed.append("bm25")
+        except Exception as e:
+            failed_stage = "bm25"
+            error_detail = str(e)
+
+    # 3) Delete uploaded PDF(s) (idempotent)
+    if failed_stage is None:
+        try:
+            pdfs_deleted = _delete_pdfs_for_document(document_id)
+            completed.append("pdf")
+        except Exception as e:
+            failed_stage = "pdf"
+            error_detail = str(e)
+
+    # 4) Delete Chroma chunks LAST (only after earlier stages succeed)
+    if failed_stage is None:
+        try:
+            documents_collection.delete(
+                where={
+                    "$and": [
+                        {"session_id": {"$eq": session_id}},
+                        {"document_id": {"$eq": document_id}},
+                    ]
+                }
+            )
+            chroma_deleted = len(owned_ids)
+            completed.append("chroma")
+        except Exception as e:
+            failed_stage = "chroma"
+            error_detail = str(e)
+
+    if failed_stage is not None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Document delete failed; retry safe for completed stages",
+                "document_id": document_id,
+                "completed": completed,
+                "failed": failed_stage,
+                "error": error_detail,
+                "deleted": {
+                    "cache_entries": cache_deleted,
+                    "bm25": bm25_deleted,
+                    "pdfs": pdfs_deleted,
+                    "chroma_chunks": chroma_deleted,
+                },
+            },
+        )
+
+    return {
+        "document_id": document_id,
+        "deleted": {
+            "cache_entries": cache_deleted,
+            "bm25": bm25_deleted,
+            "pdfs": pdfs_deleted,
+            "chroma_chunks": chroma_deleted,
+        },
+        "completed": completed,
+    }
 
 @router.post("/query")
 def ask_question(request:Request,query: Query):

@@ -90,6 +90,141 @@
   color: #b42318;
 }
 
+.knowledge-base {
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid #e5e5e5;
+  background: #fff;
+}
+
+.kb-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.kb-header h2 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #111;
+}
+
+.kb-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.kb-error {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #b42318;
+}
+
+.kb-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.kb-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.kb-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  border: 1px solid #e5e5e5;
+  border-radius: 4px;
+  background: #fafafa;
+  padding: 0.35rem;
+}
+
+.kb-row.is-active {
+  border-color: #111;
+  background: #f0f0f0;
+}
+
+.kb-row.is-busy {
+  opacity: 0.7;
+}
+
+.kb-select {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.kb-select:disabled {
+  cursor: not-allowed;
+}
+
+.kb-select:not(:disabled):hover {
+  background: #eee;
+}
+
+.kb-filename {
+  font-size: 0.9rem;
+  color: #111;
+  font-weight: 500;
+}
+
+.kb-meta {
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.kb-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.kb-danger {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid #b42318;
+  border-radius: 4px;
+  background: #b42318;
+  color: #fff;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.kb-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.kb-danger:not(:disabled):hover {
+  background: #912018;
+  border-color: #912018;
+}
+
 .retry-btn {
   padding: 0.3rem 0.65rem;
   border: 1px solid #ccc;

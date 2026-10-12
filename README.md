@@ -19,10 +19,10 @@ Three layers:
 
 **`month2_api_service/`** — FastAPI service that wraps that engine:
 - `main.py` — app setup, CORS for the Vite origin (`http://localhost:5173` / `http://127.0.0.1:5173`), dotenv, router mount
-- `routes/api.py` — HTTP endpoints: `POST /upload-document`, `POST /query` (SSE), `GET /healthz`
+- `routes/api.py` — HTTP endpoints: `POST /upload-document`, `POST /query` (SSE), `GET /documents`, `DELETE /documents/{document_id}`, `GET /healthz`
 - `services/rag.py` — RAG business logic: Chroma persistence, BM25 sparse query, RRF fusion, cross-encoder rerank, streaming generation
 
-**`month2_frontend/`** — Vite + React chat UI. Upload a PDF to `/upload-document` (cookie session), then ask questions against `/query` over SSE (`credentials: "include"`). Answers stream token-by-token; sources (chunk number + page range) render under each assistant message.
+**`month2_frontend/`** — Vite + React chat UI. Upload a PDF to `/upload-document` (cookie session), manage the knowledge base (`GET`/`DELETE /documents`: list, delete with confirm, re-upload), then ask questions against `/query` over SSE (`credentials: "include"`). Answers stream token-by-token; sources (chunk number + page range) render under each assistant message.
 
 Ingestion path: PDF → `extract_pages` → `detect_sections` → `chunk_sections` (or a synthetic `"Full Document"` section if no headings) → Chroma (`./chroma_db`, collection `documents`) + a per-document BM25 pickle (`bm25_{document_id}.pkl`).
 
@@ -47,7 +47,8 @@ Query path: session cookie required → dense Chroma query (filtered by `session
 ## Features implemented so far
 
 - **Multi-document upload** — each PDF gets a `document_id`; the UI queries that id
-- **Session-based tenant isolation** — upload sets a `session_id` cookie; Chroma queries are filtered by both `session_id` and `document_id` (`/query` returns 401 if the cookie is missing)
+- **Knowledge base UI** — list this session’s documents (`GET /documents`), hard-delete one (`DELETE /documents/{document_id}`: cache → BM25 → PDF → Chroma last), and re-upload (delete then upload → new id); click a row to make it active for chat
+- **Session-based tenant isolation** — upload sets a `session_id` cookie; Chroma queries are filtered by both `session_id` and `document_id` (`/query` returns 401 if the cookie is missing); list/delete are session-scoped (foreign or missing id → 404)
 - **Persistent Chroma storage** — embeddings survive process restarts under `./chroma_db`
 - **Hybrid search** — dense (Chroma) + sparse (BM25) fused with Reciprocal Rank Fusion
 - **Cross-encoder reranking** — RRF candidates rescored; top 3 go to the LLM
@@ -94,7 +95,7 @@ npm run dev
 
 Open the URL Vite prints (usually [http://localhost:5173](http://localhost:5173)). Upload a PDF, then ask a question.
 
-> Note: this repo path contains `&`, which breaks Windows `vite.cmd` shims. Frontend scripts call Vite via `node` instead.
+> Note: this repo path contains `&`, which breaks Windows `vite.cmd` shims. Frontend scripts call Vite via `node` instead. The same ampersand breaks `npm run lint` (`oxlint.cmd`); run `node .\node_modules\oxlint\bin\oxlint` from `month2_frontend` instead. Do not rename the project folder for this.
 
 Month 1 notebooks and the CLI still use their own setup (FAISS, Jupyter); see the Month 1 section below.
 
