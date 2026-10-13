@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
+import { normalizeCitations } from "./utils/citations.js";
 
 const API_BASE = "http://localhost:8000";
 
@@ -45,7 +46,7 @@ function formatUploadedAt(iso) {
   }
 }
 
-/** Parse SSE frames from a POST /query ReadableStream. */
+/** Parse SSE frames from a POST /query ReadableStream (cache-hit path). */
 async function readQuerySse(res, { onAnswerToken, onSources, onNotFound }) {
   if (!res.body) {
     throw new Error("No response body");
@@ -118,6 +119,58 @@ async function readQuerySse(res, { onAnswerToken, onSources, onNotFound }) {
   dispatch();
 }
 
+function SourceItem({ source }) {
+  const [expanded, setExpanded] = useState(false);
+  const panelId = `source-passage-${source.key}`;
+
+  return (
+    <li className="source-item">
+      <div className="source-head">
+        <span className="source-heading">{source.heading}</span>
+        {source.pageLabel ? (
+          <span className="source-page">{source.pageLabel}</span>
+        ) : null}
+      </div>
+      <p className="source-snippet">{source.snippet || "(empty chunk)"}</p>
+      {source.fullText ? (
+        <>
+          <button
+            type="button"
+            className="source-toggle"
+            aria-expanded={expanded}
+            aria-controls={panelId}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? "Hide passage" : "Show passage"}
+          </button>
+          {expanded ? (
+            <pre id={panelId} className="source-passage">
+              {source.fullText}
+            </pre>
+          ) : null}
+        </>
+      ) : null}
+    </li>
+  );
+}
+
+function SourcesBlock({ sources }) {
+  if (!Array.isArray(sources)) return null;
+  if (sources.length === 0) {
+    return <p className="sources-empty">No sources cited</p>;
+  }
+  return (
+    <div className="sources-block">
+      <h3 className="sources-title">Sources</h3>
+      <ul className="sources">
+        {sources.map((src) => (
+          <SourceItem key={src.key} source={src} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -149,6 +202,7 @@ function App() {
 
       if (res.status === 401) {
         setDocuments([]);
+        setDocumentId(null);
         setKbError("No session yet. Upload a document to start.");
         return;
       }
@@ -163,7 +217,13 @@ function App() {
       }
 
       const data = await res.json();
-      setDocuments(Array.isArray(data.documents) ? data.documents : []);
+      const docs = Array.isArray(data.documents) ? data.documents : [];
+      setDocuments(docs);
+      // Clear active selection if that document is no longer in the list.
+      setDocumentId((current) => {
+        if (!current) return null;
+        return docs.some((d) => d.document_id === current) ? current : null;
+      });
     } catch {
       setKbError("Could not reach the server. Is the API running?");
     } finally {
@@ -187,7 +247,7 @@ function App() {
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          Accept: "text/event-stream",
+          Accept: "text/event-stream, application/json",
         },
         body: JSON.stringify({
           query: text,
@@ -211,6 +271,27 @@ function App() {
         return;
       }
 
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+
+      // Cache miss: plain JSON { answer, citations }
+      if (contentType.includes("application/json")) {
+        const data = await res.json();
+        const answer =
+          typeof data.answer === "string" ? data.answer : "";
+        const normalized = normalizeCitations(data.citations);
+        setMessages((prev) =>
+          updateLastAssistant(prev, () => ({
+            text: answer || "No answer came back. Try again.",
+            sources: normalized,
+            error: !answer,
+            retryQuestion: answer ? undefined : text,
+          })),
+        );
+        return;
+      }
+
+      // Cache hit: SSE answer + sources events
+      let sawSourcesEvent = false;
       await readQuerySse(res, {
         onAnswerToken(token) {
           setMessages((prev) =>
@@ -221,9 +302,10 @@ function App() {
           );
         },
         onSources(sources) {
+          sawSourcesEvent = true;
           setMessages((prev) =>
             updateLastAssistant(prev, () => ({
-              sources: Array.isArray(sources) ? sources : null,
+              sources: normalizeCitations(sources),
             })),
           );
         },
@@ -231,14 +313,13 @@ function App() {
           setMessages((prev) =>
             updateLastAssistant(prev, () => ({
               text: message,
-              sources: null,
+              sources: [],
               error: false,
             })),
           );
         },
       });
 
-      // If stream closed with no tokens and no not_found text, show a fallback
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && !last.text) {
@@ -246,6 +327,18 @@ function App() {
             text: "No answer came back. Try again.",
             error: true,
             retryQuestion: text,
+            sources: null,
+          }));
+        }
+        // Successful SSE with no sources event → treat as no citations
+        if (
+          last?.role === "assistant" &&
+          !last.error &&
+          !sawSourcesEvent &&
+          last.sources == null
+        ) {
+          return updateLastAssistant(prev, () => ({
+            sources: [],
           }));
         }
         return prev;
@@ -607,22 +700,8 @@ function App() {
                     ? "Thinking…"
                     : "")}
               </p>
-              {msg.role === "assistant" &&
-              Array.isArray(msg.sources) &&
-              msg.sources.length > 0 ? (
-                <ul className="sources">
-                  {msg.sources.map((src, j) => {
-                    const page =
-                      src.startPage === src.endPage
-                        ? `p. ${src.startPage}`
-                        : `p. ${src.startPage}–${src.endPage}`;
-                    return (
-                      <li key={`${src.document_id ?? "doc"}-${src.chunkNumber ?? j}`}>
-                        Chunk {src.chunkNumber} · {page}
-                      </li>
-                    );
-                  })}
-                </ul>
+              {msg.role === "assistant" && !msg.error ? (
+                <SourcesBlock sources={msg.sources} />
               ) : null}
               {msg.role === "assistant" && msg.error && msg.retryQuestion ? (
                 <button

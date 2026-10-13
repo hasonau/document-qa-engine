@@ -22,7 +22,7 @@ Three layers:
 - `routes/api.py` — HTTP endpoints: `POST /upload-document`, `POST /query` (SSE), `GET /documents`, `DELETE /documents/{document_id}`, `GET /healthz`
 - `services/rag.py` — RAG business logic: Chroma persistence, BM25 sparse query, RRF fusion, cross-encoder rerank, streaming generation
 
-**`month2_frontend/`** — Vite + React chat UI. Upload a PDF to `/upload-document` (cookie session), manage the knowledge base (`GET`/`DELETE /documents`: list, delete with confirm, re-upload), then ask questions against `/query` over SSE (`credentials: "include"`). Answers stream token-by-token; sources (chunk number + page range) render under each assistant message.
+**`month2_frontend/`** — Vite + React chat UI. Upload a PDF to `/upload-document` (cookie session), manage the knowledge base (`GET`/`DELETE /documents`: list, delete with confirm, re-upload), then ask questions against `/query` (`credentials: "include"`). Cache misses return JSON (`answer` + `citations`); cache hits stream SSE (`answer` + `sources`). The Sources UI shows heading, 1-based pages, snippet, and expandable plain-text passage.
 
 Ingestion path: PDF → `extract_pages` → `detect_sections` → `chunk_sections` (or a synthetic `"Full Document"` section if no headings) → Chroma (`./chroma_db`, collection `documents`) + a per-document BM25 pickle (`bm25_{document_id}.pkl`).
 
@@ -53,6 +53,7 @@ Query path: session cookie required → dense Chroma query (filtered by `session
 - **Hybrid search** — dense (Chroma) + sparse (BM25) fused with Reciprocal Rank Fusion
 - **Cross-encoder reranking** — RRF candidates rescored; top 3 go to the LLM
 - **Streaming SSE responses** — `/query` yields `answer` tokens, then a `sources` JSON payload
+- **Source citations UI** — under each answer, a Sources list (heading, 1-based page label, snippet, expand/collapse full passage as plain text); works for cache-miss JSON `citations` and cache-hit SSE `sources` via one normalizer (`src/utils/citations.js`, covered by `node --test`)
 - **Structure-aware chunking** — heading detection, then per-section fixed-size splits; documents with no detected headings fall back to one synthetic `"Full Document"` section and the same `chunk_sections()` path
 - **Source metadata in context** — the prompt includes section heading, page range, and chunk number
 - **Offline evaluation harness** — golden set, raw run runner, and retrieval metrics under `evaluation/` (LLM judge not built yet)
