@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import { normalizeCitations } from "./utils/citations.js";
+import { formatAnswer, isDontKnow } from "./utils/formatAnswer.js";
 
 const API_BASE = "http://localhost:8000";
+const IDK_HINT =
+  "Try asking about a specific topic or detail in the document.";
 
 function updateLastAssistant(prev, patch) {
   const next = [...prev];
@@ -119,6 +122,51 @@ async function readQuerySse(res, { onAnswerToken, onSources, onNotFound }) {
   dispatch();
 }
 
+function renderSpans(spans) {
+  return spans.map((span, i) =>
+    span.type === "bold" ? (
+      <strong key={i}>{span.text}</strong>
+    ) : (
+      <span key={i}>{span.text}</span>
+    ),
+  );
+}
+
+function FormattedAnswer({ text }) {
+  const blocks = formatAnswer(text);
+  if (blocks.length === 0) return null;
+
+  return (
+    <div className="answer-body">
+      {blocks.map((block, i) => {
+        if (block.type === "ul") {
+          return (
+            <ul key={i} className="answer-list">
+              {block.items.map((item, j) => (
+                <li key={j}>{renderSpans(item.spans)}</li>
+              ))}
+            </ul>
+          );
+        }
+        if (block.type === "ol") {
+          return (
+            <ol key={i} className="answer-list answer-list-numbered">
+              {block.items.map((item, j) => (
+                <li key={j}>{renderSpans(item.spans)}</li>
+              ))}
+            </ol>
+          );
+        }
+        return (
+          <p key={i} className="answer-paragraph">
+            {renderSpans(block.spans)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function SourceItem({ source }) {
   const [expanded, setExpanded] = useState(false);
   const panelId = `source-passage-${source.key}`;
@@ -171,6 +219,32 @@ function SourcesBlock({ sources }) {
   );
 }
 
+function CopyAnswerButton({ text, disabled }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    if (!text || disabled) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="copy-btn"
+      onClick={handleCopy}
+      disabled={disabled || !text}
+    >
+      {copied ? "Copied" : "Copy answer"}
+    </button>
+  );
+}
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -188,6 +262,7 @@ function App() {
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const reuploadInputRef = useRef(null);
   const reuploadTargetIdRef = useRef(null);
+  const messagesEndRef = useRef(null);
 
   const busy = uploading || streaming || kbBusyId !== null;
 
@@ -234,6 +309,10 @@ function App() {
   useEffect(() => {
     refreshDocuments();
   }, [refreshDocuments]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, streaming]);
 
   async function runQuery(question) {
     const text = question.trim();
@@ -362,7 +441,7 @@ function App() {
     e.preventDefault();
 
     const text = input.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || !documentId) return;
 
     setMessages((prev) => [
       ...prev,
@@ -371,6 +450,15 @@ function App() {
     ]);
     setInput("");
     await runQuery(text);
+  }
+
+  function handleComposerKeyDown(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!busy && documentId && input.trim()) {
+        handleSend(e);
+      }
+    }
   }
 
   async function handleRetryMessage(assistantIndex) {
@@ -529,6 +617,13 @@ function App() {
     }
   }
 
+  function emptyStateMessage() {
+    if (!documentId) {
+      return "Upload a PDF or select one in the Knowledge Base to start";
+    }
+    return "Document selected. Ask a question below about this PDF.";
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -684,54 +779,93 @@ function App() {
         ) : null}
       </section>
 
-      <main className="messages">
+      <main className="messages" aria-live="polite">
         {messages.length === 0 ? (
-          <p className="empty">No messages yet. Ask a question below.</p>
+          <p className="empty">{emptyStateMessage()}</p>
         ) : (
-          messages.map((msg, i) => (
-            <div
-              key={i}
-              className={`bubble ${msg.role}${msg.error ? " error" : ""}`}
-            >
-              <span className="label">{msg.role}</span>
-              <p>
-                {msg.text ||
-                  (msg.role === "assistant" && streaming && i === messages.length - 1
-                    ? "Thinking…"
-                    : "")}
-              </p>
-              {msg.role === "assistant" && !msg.error ? (
-                <SourcesBlock sources={msg.sources} />
-              ) : null}
-              {msg.role === "assistant" && msg.error && msg.retryQuestion ? (
-                <button
-                  type="button"
-                  className="retry-btn"
-                  onClick={() => handleRetryMessage(i)}
-                  disabled={busy}
-                >
-                  Retry
-                </button>
-              ) : null}
-            </div>
-          ))
+          messages.map((msg, i) => {
+            const isLast = i === messages.length - 1;
+            const isLoadingAssistant =
+              msg.role === "assistant" &&
+              streaming &&
+              isLast &&
+              !msg.text &&
+              !msg.error;
+            const dontKnow =
+              msg.role === "assistant" &&
+              !msg.error &&
+              !streaming &&
+              isDontKnow(msg.text);
+
+            return (
+              <div
+                key={i}
+                className={`bubble ${msg.role}${msg.error ? " error" : ""}${dontKnow ? " idk" : ""}${isLoadingAssistant ? " is-loading" : ""}`}
+              >
+                <span className="label">{msg.role}</span>
+
+                {isLoadingAssistant ? (
+                  <p className="loading-state" role="status">
+                    Generating answer…
+                  </p>
+                ) : msg.role === "assistant" && !msg.error ? (
+                  dontKnow ? (
+                    <div className="answer-idk">
+                      <p className="answer-idk-text">{msg.text}</p>
+                      <p className="answer-hint">{IDK_HINT}</p>
+                    </div>
+                  ) : (
+                    <FormattedAnswer text={msg.text} />
+                  )
+                ) : (
+                  <p className="answer-plain">{msg.text}</p>
+                )}
+
+                {msg.role === "assistant" &&
+                !msg.error &&
+                msg.text &&
+                !(streaming && isLast) ? (
+                  <div className="answer-actions">
+                    <CopyAnswerButton text={msg.text} disabled={busy} />
+                  </div>
+                ) : null}
+
+                {msg.role === "assistant" && !msg.error ? (
+                  <SourcesBlock sources={msg.sources} />
+                ) : null}
+
+                {msg.role === "assistant" && msg.error && msg.retryQuestion ? (
+                  <button
+                    type="button"
+                    className="retry-btn"
+                    onClick={() => handleRetryMessage(i)}
+                    disabled={busy}
+                  >
+                    Retry
+                  </button>
+                ) : null}
+              </div>
+            );
+          })
         )}
+        <div ref={messagesEndRef} />
       </main>
 
       <form className="composer" onSubmit={handleSend}>
-        <input
-          type="text"
+        <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleComposerKeyDown}
+          rows={2}
           placeholder={
             !documentId
-              ? "Select a document above, then ask…"
+              ? "Upload or select a document to start…"
               : streaming
                 ? "Waiting for answer…"
-                : "Ask a question..."
+                : "Ask a question… (Enter to send, Shift+Enter for newline)"
           }
           aria-label="Message"
-          disabled={busy}
+          disabled={busy || !documentId}
         />
         <button type="submit" disabled={!input.trim() || busy || !documentId}>
           {streaming ? "…" : "Send"}

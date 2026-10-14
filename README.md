@@ -54,6 +54,7 @@ Query path: session cookie required → dense Chroma query (filtered by `session
 - **Cross-encoder reranking** — RRF candidates rescored; top 3 go to the LLM
 - **Streaming SSE responses** — `/query` yields `answer` tokens, then a `sources` JSON payload
 - **Source citations UI** — under each answer, a Sources list (heading, 1-based page label, snippet, expand/collapse full passage as plain text); works for cache-miss JSON `citations` and cache-hit SSE `sources` via one normalizer (`src/utils/citations.js`, covered by `node --test`)
+- **Answer formatting + chat polish** — UI-only formatter for paragraphs / bullets / numbered lists / `**bold**` (plain React text, no HTML injection); muted “I don’t know” with a hint; Copy answer; clearer loading/empty states, Enter-to-send, auto-scroll (`src/utils/formatAnswer.js`, `node --test`)
 - **Structure-aware chunking** — heading detection, then per-section fixed-size splits; documents with no detected headings fall back to one synthetic `"Full Document"` section and the same `chunk_sections()` path
 - **Source metadata in context** — the prompt includes section heading, page range, and chunk number
 - **Offline evaluation harness** — golden set, raw run runner, and retrieval metrics under `evaluation/` (LLM judge not built yet)
