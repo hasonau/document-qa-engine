@@ -15,10 +15,35 @@ function updateLastAssistant(prev, patch) {
   return next;
 }
 
-async function readErrorDetail(res, fallback) {
+/** Map common HTTP statuses to short UI copy when the body is empty/unhelpful. */
+function friendlyStatusMessage(status, context) {
+  const forUpload = context === "upload";
+  switch (status) {
+    case 413:
+      return forUpload
+        ? "That file is too large. Please upload a PDF under 10 MB."
+        : "That request is too large.";
+    case 415:
+      return "Only PDF files are supported.";
+    case 422:
+      return forUpload
+        ? "This PDF cannot be processed (no extractable text, too many pages, or document limit reached)."
+        : "That question could not be processed. Check length and try again.";
+    case 429:
+      return "Too many requests. Please wait a moment and try again.";
+    case 503:
+      return "The language model is temporarily unavailable. Please try again.";
+    default:
+      return null;
+  }
+}
+
+async function readErrorDetail(res, fallback, context) {
+  const statusFriendly = friendlyStatusMessage(res.status, context);
   try {
     const data = await res.json();
     if (typeof data.detail === "string" && data.detail.trim()) {
+      // Prefer server message (includes 10-doc limit, scanned PDF, etc.)
       return data.detail;
     }
     if (data.detail && typeof data.detail === "object") {
@@ -37,7 +62,7 @@ async function readErrorDetail(res, fallback) {
   } catch {
     // non-JSON body
   }
-  return fallback;
+  return statusFriendly || fallback;
 }
 
 function formatUploadedAt(iso) {
@@ -338,6 +363,7 @@ function App() {
         const detail = await readErrorDetail(
           res,
           `Request failed (${res.status}). Try again.`,
+          "query",
         );
         setMessages((prev) =>
           updateLastAssistant(prev, () => ({
@@ -492,7 +518,11 @@ function App() {
     });
 
     if (!res.ok) {
-      const detail = await readErrorDetail(res, `Upload failed (${res.status})`);
+      const detail = await readErrorDetail(
+        res,
+        `Upload failed (${res.status})`,
+        "upload",
+      );
       throw new Error(detail);
     }
 

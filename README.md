@@ -18,9 +18,11 @@ Three layers:
 **`month1_rag_engine/`** — pure, reusable RAG logic with no HTTP concerns. `extract_pages()` pulls text with pdfplumber. `detect_sections()` splits pages into heading-bounded sections. `chunk_sections()` then splits each section with fixed-size windows (200 words, 30-word overlap) and attaches `sectionNumber`, `heading`, `startPage`, `endPage`, and `chunkNumber`. Embedding and CLI-era FAISS indexing / generation helpers still live here for the Month 1 notebooks and CLI.
 
 **`month2_api_service/`** — FastAPI service that wraps that engine:
-- `main.py` — app setup, CORS for the Vite origin (`http://localhost:5173` / `http://127.0.0.1:5173`), dotenv, router mount
+- `main.py` — app setup, CORS from `ALLOWED_ORIGINS` (default local Vite), request-id middleware, generic 500 handler, dotenv, router mount
+- `config.py` — env-configurable upload/query/rate-limit defaults
 - `routes/api.py` — HTTP endpoints: `POST /upload-document`, `POST /query` (SSE), `GET /documents`, `DELETE /documents/{document_id}`, `GET /healthz`
 - `services/rag.py` — RAG business logic: Chroma persistence, BM25 sparse query, RRF fusion, cross-encoder rerank, streaming generation
+- `services/security.py` — filename sanitizer, validators, in-memory rate limiter
 
 **`month2_frontend/`** — Vite + React chat UI. Upload a PDF to `/upload-document` (cookie session), manage the knowledge base (`GET`/`DELETE /documents`: list, delete with confirm, re-upload), then ask questions against `/query` (`credentials: "include"`). Cache misses return JSON (`answer` + `citations`); cache hits stream SSE (`answer` + `sources`). The Sources UI shows heading, 1-based pages, snippet, and expandable plain-text passage.
 
@@ -58,6 +60,40 @@ Query path: session cookie required → dense Chroma query (filtered by `session
 - **Structure-aware chunking** — heading detection, then per-section fixed-size splits; documents with no detected headings fall back to one synthetic `"Full Document"` section and the same `chunk_sections()` path
 - **Source metadata in context** — the prompt includes section heading, page range, and chunk number
 - **Offline evaluation harness** — golden set, raw run runner, and retrieval metrics under `evaluation/` (LLM judge not built yet)
+- **Upload / query limits + security basics** — size/type/page/session caps, empty-PDF rejection with cleanup, filename sanitizing, query length checks, per-session rate limits, generic client errors with request ids, configurable CORS (see Limits and security)
+
+---
+
+## Limits and security
+
+Configurable via environment variables (defaults in parentheses; see `.env.example`):
+
+| Limit | Env var | Default |
+| --- | --- | --- |
+| Max upload size | `MAX_UPLOAD_BYTES` | 10 MB (413 if exceeded while reading) |
+| PDF only | (magic bytes `%PDF-`) | 415 otherwise |
+| Max pages | `MAX_PDF_PAGES` | 100 (422) |
+| Max documents per session | `MAX_DOCS_PER_SESSION` | 10 (422) |
+| Min extractable text | `MIN_EXTRACTABLE_CHARS` | ~200 chars; else 422 and nothing stored |
+| Max question length | `MAX_QUERY_CHARS` | 1000 (422); empty/whitespace → 400 |
+| `/query` rate limit | `QUERY_RATE_LIMIT_PER_MINUTE` | 20 / session / minute (429 + `Retry-After`) |
+| `/upload-document` rate limit | `UPLOAD_RATE_LIMIT_PER_MINUTE` | 5 / session / minute (429 + `Retry-After`) |
+| CORS origins | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` |
+
+Failed mid-ingest uploads remove the saved PDF, BM25 pickle, and Chroma chunks. Client errors are generic with a short request id (real traces stay in server logs). Groq / language-model outages on `/query` return 503 with a fixed retry message. The offline eval harness still calls `answer_question` directly and can see raw exceptions.
+
+The in-memory rate limiter resets when the process restarts and is per instance (not shared across hosts).
+
+---
+
+## Known limitations
+
+- Vague questions like “what is in this PDF?” retrieve arbitrary chunks on large documents (verified on a 40-page throwaway in the collection).
+- Cache hits show all reranked chunks as sources; fresh answers show only cited chunks.
+- Answer correctness and faithfulness are not measured (no LLM judge yet).
+- The rate limiter is in-memory and per instance.
+- Local disk data (`chroma_db/`, `bm25_*.pkl`, uploaded PDFs) is not durable on free hosting.
+- A PDF that *looks* like one page can still be two pages to the extractor; page labels follow stored `startPage`/`endPage` (0-based, +1 in the UI).
 
 ---
 
