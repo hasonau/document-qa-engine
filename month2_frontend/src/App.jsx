@@ -7,6 +7,13 @@ const API_BASE = "http://localhost:8000";
 const IDK_HINT =
   "Try asking about a specific topic or detail in the document.";
 
+/** Suggested questions for the bundled sample PDF (and useful after any load). */
+const SAMPLE_QUESTIONS = [
+  "What is the embedding store demo codeword in the indexing pipeline?",
+  "How many candidate passages does this guide keep after hybrid merge before reranking?",
+  "What temperature does the grounded answer step use in this guide?",
+];
+
 function updateLastAssistant(prev, patch) {
   const next = [...prev];
   const last = next[next.length - 1];
@@ -555,6 +562,65 @@ function App() {
     }
   }
 
+  async function handleLoadSample() {
+    if (uploading || busy) return;
+
+    setUploading(true);
+    setUploadError(false);
+    setUploadStatus("Loading sample document…");
+
+    try {
+      const res = await fetch(`${API_BASE}/load-sample`, {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const detail = await readErrorDetail(
+          res,
+          `Could not load sample (${res.status})`,
+          "upload",
+        );
+        throw new Error(detail);
+      }
+
+      const data = await res.json();
+      if (data.document_id) setDocumentId(data.document_id);
+      setUploadError(false);
+      const chunks =
+        typeof data.chunks_count === "number"
+          ? ` (${data.chunks_count} chunks)`
+          : "";
+      setUploadStatus(
+        `Sample loaded: ${data.filename || "rag_how_it_works.pdf"}${chunks}`,
+      );
+      await refreshDocuments();
+    } catch (err) {
+      setUploadError(true);
+      setUploadStatus(
+        err instanceof Error
+          ? err.message
+          : "Could not reach the server. Is the API running?",
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleSuggestedQuestion(question) {
+    if (!documentId || streaming || busy) return;
+    const text = question.trim();
+    if (!text) return;
+
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", text },
+      { role: "assistant", text: "", sources: null, error: false },
+    ]);
+    setInput("");
+    await runQuery(text);
+  }
+
   async function deleteDocument(targetId) {
     const res = await fetch(
       `${API_BASE}/documents/${encodeURIComponent(targetId)}`,
@@ -649,7 +715,7 @@ function App() {
 
   function emptyStateMessage() {
     if (!documentId) {
-      return "Upload a PDF or select one in the Knowledge Base to start";
+      return "Upload a PDF, load the sample document, or select one in the Knowledge Base to start";
     }
     return "Document selected. Ask a question below about this PDF.";
   }
@@ -680,6 +746,14 @@ function App() {
             disabled={!selectedFile || busy}
           >
             {uploading ? "Uploading…" : "Upload"}
+          </button>
+          <button
+            type="button"
+            className="sample-btn"
+            onClick={handleLoadSample}
+            disabled={busy}
+          >
+            Load sample document
           </button>
         </div>
         {uploadStatus ? (
@@ -881,6 +955,26 @@ function App() {
         <div ref={messagesEndRef} />
       </main>
 
+      {documentId ? (
+        <section className="suggestions" aria-label="Suggested questions">
+          <p className="suggestions-label">Suggested questions</p>
+          <ul className="suggestions-list">
+            {SAMPLE_QUESTIONS.map((q) => (
+              <li key={q}>
+                <button
+                  type="button"
+                  className="suggestion-btn"
+                  onClick={() => handleSuggestedQuestion(q)}
+                  disabled={busy}
+                >
+                  {q}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <form className="composer" onSubmit={handleSend}>
         <textarea
           value={input}
@@ -889,7 +983,7 @@ function App() {
           rows={2}
           placeholder={
             !documentId
-              ? "Upload or select a document to start…"
+              ? "Upload, load the sample, or select a document to start…"
               : streaming
                 ? "Waiting for answer…"
                 : "Ask a question… (Enter to send, Shift+Enter for newline)"

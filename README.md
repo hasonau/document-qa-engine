@@ -1,66 +1,130 @@
-p# document-qa-engine
+# document-qa-engine
 
-An AI Document Assistant: a RAG system that supports multi-document PDF upload, structure-aware chunking (heading detection with a headerless-document fallback), hybrid search (dense + BM25 fused with RRF), and cross-encoder reranking. It is exposed as a FastAPI service with streaming SSE answers and a React chat UI.
+An AI Document Assistant built as a learning project: upload PDFs, retrieve relevant chunks with hybrid search and reranking, and answer questions grounded in those chunks. It ships as a FastAPI backend plus a React chat UI that you run locally.
+
+Layout: `month1_rag_engine/` (notebooks, CLI-era helpers, shared extraction/chunking), `month2_api_service/` (HTTP API), `month2_frontend/` (Vite + React), `evaluation/` (offline harness), `docs/DEPLOY.md` (deploy-later notes), `learning/` (curriculum).
+
+---
+
+## Demo
+
+There is no hosted live demo. Run the API and frontend locally (see Quick start), then try this 60–90 second script:
+
+1. Open the chat UI and click **Load sample document** (bundled two-page PDF about how RAG works).
+2. Confirm the document appears in the knowledge base (expect more than three chunks).
+3. Click one suggested question (or paste it) and wait for an answer with Sources.
+4. Optionally ask a second suggested question, then delete the sample from the knowledge base.
+
+Video walkthrough (placeholder): _add a public link here when you record one._
+
+For hosting later (memory needs, cookies, smoke checks), see [`docs/DEPLOY.md`](docs/DEPLOY.md). **The app is not deployed.**
+
+---
+
+## Features
+
+- Multi-document PDF upload with a per-session knowledge base (list, select, delete, re-upload)
+- **Load sample document** (`POST /load-sample`) for a bundled original PDF plus three suggested questions in the UI
+- Session cookie isolation (`session_id`); retrieval filtered by session and document
+- Structure-aware chunking (heading detection, or a synthetic `"Full Document"` section)
+- Hybrid retrieval: dense (Chroma) + BM25, fused with RRF, then cross-encoder rerank; top chunks to Groq
+- Streaming SSE on cache hits; JSON `answer` + `citations` on cache misses
+- Sources UI (heading, pages, snippet, expandable passage) and render-only answer formatting
+- Upload/query limits, rate limits, filename sanitizing, generic client errors with request ids
+- Offline evaluation harness under `evaluation/` (retrieval metrics; no LLM judge yet)
+
+---
+
+## Quick start
+
+**Prerequisites:** developed and tested on Python 3.14.x; other versions are untested. Node.js for the frontend, and a Groq API key for live answers.
+
+1. From the repo root, create a virtualenv, install dependencies, and copy environment variables:
+
+```bash
+python -m venv .venv
+# Windows: .\.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+```
+
+Edit `.env` and set at least:
 
 ```
-month1_rag_engine/     notebooks + reusable RAG logic + CLI
-month2_api_service/    FastAPI service (upload, query, hybrid retrieval)
-month2_frontend/       Vite + React chat UI
-learning/              study curriculum
+GROQ_API_KEY=your_groq_api_key_here
 ```
 
+Optional limits and CORS defaults are listed (commented) in `.env.example`. Never commit `.env`.
+
+2. Start the API from the **repo root** (paths for `chroma_db/`, `bm25_*.pkl`, and uploads are relative to the working directory):
+
+```bash
+python -m uvicorn month2_api_service.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Check `GET http://localhost:8000/healthz` → `{"status":"ok"}`.
+
+3. Start the frontend:
+
+```bash
+cd month2_frontend
+npm install
+npm run dev
+```
+
+Open the URL Vite prints (usually `http://localhost:5173`). Load the sample or upload a PDF, then ask a question.
+
+> On Windows, if the repo path contains `&`, prefer `node .\node_modules\vite\bin\vite.js` (already used by `npm run dev`) and lint with `node .\node_modules\oxlint\bin\oxlint` instead of `npm run lint`.
+
+### Tests and evaluation
+
+```powershell
+# API unit tests
+.\.venv\Scripts\python.exe -m unittest month2_api_service.tests.test_security_helpers -v
+
+# Frontend
+cd month2_frontend
+npm run build
+node --test src/utils/*.test.js
+node .\node_modules\oxlint\bin\oxlint
+
+# Offline eval (needs GROQ_API_KEY and EVAL_SESSION_ID for the golden document)
+cd ..
+$env:EVAL_SESSION_ID = "<session_id from Chroma metadata for the golden document>"
+.\.venv\Scripts\python.exe evaluation\run_eval.py --limit 3
+.\.venv\Scripts\python.exe evaluation\retrieval_metrics.py
+```
+
+`EVAL_SESSION_ID` must match the golden document’s stored `session_id`. Do not commit real session ids. Results under `evaluation/results/` are gitignored.
+
 ---
 
-## Architecture
+## API endpoints
 
-Three layers:
+| Method | Path | Notes |
+| --- | --- | --- |
+| `GET` | `/healthz` | Liveness |
+| `GET` | `/` | Simple hello payload |
+| `POST` | `/upload-document` | Multipart field `document`; may set `session_id` cookie |
+| `POST` | `/load-sample` | Ingests the bundled sample into the current session (same limits/rate limit as upload) |
+| `GET` | `/documents` | List documents for this session (401 without cookie) |
+| `DELETE` | `/documents/{document_id}` | Hard-delete for this session only; foreign/missing id → 404 |
+| `POST` | `/query` | Body `{ "query", "document_id" }`; cookie required; SSE or JSON |
 
-**`month1_rag_engine/`** — pure, reusable RAG logic with no HTTP concerns. `extract_pages()` pulls text with pdfplumber. `detect_sections()` splits pages into heading-bounded sections. `chunk_sections()` then splits each section with fixed-size windows (200 words, 30-word overlap) and attaches `sectionNumber`, `heading`, `startPage`, `endPage`, and `chunkNumber`. Embedding and CLI-era FAISS indexing / generation helpers still live here for the Month 1 notebooks and CLI.
-
-**`month2_api_service/`** — FastAPI service that wraps that engine:
-- `main.py` — app setup, CORS from `ALLOWED_ORIGINS` (default local Vite), request-id middleware, generic 500 handler, dotenv, router mount
-- `config.py` — env-configurable upload/query/rate-limit defaults
-- `routes/api.py` — HTTP endpoints: `POST /upload-document`, `POST /query` (SSE), `GET /documents`, `DELETE /documents/{document_id}`, `GET /healthz`
-- `services/rag.py` — RAG business logic: Chroma persistence, BM25 sparse query, RRF fusion, cross-encoder rerank, streaming generation
-- `services/security.py` — filename sanitizer, validators, in-memory rate limiter
-
-**`month2_frontend/`** — Vite + React chat UI. Upload a PDF to `/upload-document` (cookie session), manage the knowledge base (`GET`/`DELETE /documents`: list, delete with confirm, re-upload), then ask questions against `/query` (`credentials: "include"`). Cache misses return JSON (`answer` + `citations`); cache hits stream SSE (`answer` + `sources`). The Sources UI shows heading, 1-based pages, snippet, and expandable plain-text passage.
-
-Ingestion path: PDF → `extract_pages` → `detect_sections` → `chunk_sections` (or a synthetic `"Full Document"` section if no headings) → Chroma (`./chroma_db`, collection `documents`) + a per-document BM25 pickle (`bm25_{document_id}.pkl`).
-
-Query path: session cookie required → dense Chroma query (filtered by `session_id` + `document_id`, top 10) and BM25 (top 10) → RRF (`k=60`, top 10) → cross-encoder rerank → top 3 chunks into Groq → SSE `answer` tokens, then a `sources` event.
+Ingestion writes Chroma (`./chroma_db`, collection `documents`) and `bm25_{document_id}.pkl`. Query path: dense top 10 + BM25 top 10 → RRF (`k=60`, top 10) → cross-encoder → top 3 chunks into Groq (`ANSWER_MODEL` / `EXPANSION_MODEL` in `month2_api_service/services/rag.py`).
 
 ---
 
-## Tech stack
+## Evaluation summary
 
-- **FastAPI** + **uvicorn** — HTTP service
-- **ChromaDB** — persistent vector store (`PersistentClient`, path `./chroma_db`)
-- **Groq** (`llama-3.3-70b-versatile`) — generation
-- **sentence-transformers** (`all-MiniLM-L6-v2`) — dense embeddings
-- **rank_bm25** (`BM25Okapi`) — sparse retrieval
-- **cross-encoder reranker** (`cross-encoder/ms-marco-MiniLM-L-6-v2`)
-- **sse-starlette** — streaming query responses
-- **pdfplumber** — PDF text extraction
-- **React** (Vite) — chat UI
+Offline harness under `evaluation/`. Corpus: **one document, 9 chunks** (18 answerable + 2 unanswerable questions in `golden_dataset.json`). Metrics are therefore **saturated** (Hit@k can reach 1.0 easily) and cannot show whether reranking or query expansion helps.
 
----
+Recorded baselines (from prior runs documented here; result JSON files are gitignored):
 
-## Features implemented so far
+- **Day 23** — `run_20261007_103939`: of 20 questions, 2 answers failed (items 17 and 18). Retrieval on 16 answerable rows without errors: Hit@1 0.938, Hit@k 1.000, recall 1.000, MRR 0.969; both unanswerable answered `I don't know`.
+- **Updated baseline (default temperature)** — `run_20261011_130503`: Hit@1 0.944, Hit@k 1.000, recall 1.000, MRR 0.972 on 18 answerable; unanswerable 2 of 2. Later `run_20261011_131637` matched those retrieval numbers with answer success 20 of 20.
 
-- **Multi-document upload** — each PDF gets a `document_id`; the UI queries that id
-- **Knowledge base UI** — list this session’s documents (`GET /documents`), hard-delete one (`DELETE /documents/{document_id}`: cache → BM25 → PDF → Chroma last), and re-upload (delete then upload → new id); click a row to make it active for chat
-- **Session-based tenant isolation** — upload sets a `session_id` cookie; Chroma queries are filtered by both `session_id` and `document_id` (`/query` returns 401 if the cookie is missing); list/delete are session-scoped (foreign or missing id → 404)
-- **Persistent Chroma storage** — embeddings survive process restarts under `./chroma_db`
-- **Hybrid search** — dense (Chroma) + sparse (BM25) fused with Reciprocal Rank Fusion
-- **Cross-encoder reranking** — RRF candidates rescored; top 3 go to the LLM
-- **Streaming SSE responses** — `/query` yields `answer` tokens, then a `sources` JSON payload
-- **Source citations UI** — under each answer, a Sources list (heading, 1-based page label, snippet, expand/collapse full passage as plain text); works for cache-miss JSON `citations` and cache-hit SSE `sources` via one normalizer (`src/utils/citations.js`, covered by `node --test`)
-- **Answer formatting + chat polish** — UI-only formatter for paragraphs / bullets / numbered lists / `**bold**` (plain React text, no HTML injection); muted “I don’t know” with a hint; Copy answer; clearer loading/empty states, Enter-to-send, auto-scroll (`src/utils/formatAnswer.js`, `node --test`)
-- **Structure-aware chunking** — heading detection, then per-section fixed-size splits; documents with no detected headings fall back to one synthetic `"Full Document"` section and the same `chunk_sections()` path
-- **Source metadata in context** — the prompt includes section heading, page range, and chunk number
-- **Offline evaluation harness** — golden set, raw run runner, and retrieval metrics under `evaluation/` (LLM judge not built yet)
-- **Upload / query limits + security basics** — size/type/page/session caps, empty-PDF rejection with cleanup, filename sanitizing, query length checks, per-session rate limits, generic client errors with request ids, configurable CORS (see Limits and security)
+The LLM judge (correctness, completeness, relevance, faithfulness) is not built. Multi-document evaluation and ablations are not done. See Decision Log and `findings/day23-eval-notes.md`.
 
 ---
 
@@ -70,284 +134,101 @@ Configurable via environment variables (defaults in parentheses; see `.env.examp
 
 | Limit | Env var | Default |
 | --- | --- | --- |
-| Max upload size | `MAX_UPLOAD_BYTES` | 10 MB (413 if exceeded while reading) |
-| PDF only | (magic bytes `%PDF-`) | 415 otherwise |
+| Max upload size | `MAX_UPLOAD_BYTES` | 10 MB (413) |
+| PDF only | magic bytes `%PDF-` | 415 otherwise |
 | Max pages | `MAX_PDF_PAGES` | 100 (422) |
 | Max documents per session | `MAX_DOCS_PER_SESSION` | 10 (422) |
 | Min extractable text | `MIN_EXTRACTABLE_CHARS` | ~200 chars; else 422 and nothing stored |
-| Max question length | `MAX_QUERY_CHARS` | 1000 (422); empty/whitespace → 400 |
+| Max question length | `MAX_QUERY_CHARS` | 1000 (422); empty → 400 |
 | `/query` rate limit | `QUERY_RATE_LIMIT_PER_MINUTE` | 20 / session / minute (429 + `Retry-After`) |
-| `/upload-document` rate limit | `UPLOAD_RATE_LIMIT_PER_MINUTE` | 5 / session / minute (429 + `Retry-After`) |
+| Upload / load-sample rate limit | `UPLOAD_RATE_LIMIT_PER_MINUTE` | 5 / session / minute (429 + `Retry-After`) |
 | CORS origins | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` |
 
-Failed mid-ingest uploads remove the saved PDF, BM25 pickle, and Chroma chunks. Client errors are generic with a short request id (real traces stay in server logs). Groq / language-model outages on `/query` return 503 with a fixed retry message. The offline eval harness still calls `answer_question` directly and can see raw exceptions.
-
-The in-memory rate limiter resets when the process restarts and is per instance (not shared across hosts).
+Failed mid-ingest uploads remove the saved PDF, BM25 pickle, and Chroma chunks. Client errors are generic with a request id. Groq outages on `/query` return 503 with a fixed message. The offline eval harness calls `answer_question` directly and can see raw exceptions. The in-memory rate limiter resets on process restart and is per instance.
 
 ---
 
 ## Known limitations
 
-- Vague questions like “what is in this PDF?” retrieve arbitrary chunks on large documents (verified on a 40-page throwaway in the collection).
+- The heading heuristic over-fires on notes-style PDFs (example: **212** sections and **83** of **224** chunks under 20 words on a 40-page test PDF).
+- Vague “what is in this PDF” questions retrieve arbitrary chunks on large documents.
 - Cache hits show all reranked chunks as sources; fresh answers show only cited chunks.
-- Answer correctness and faithfulness are not measured (no LLM judge yet).
-- The rate limiter is in-memory and per instance.
-- Local disk data (`chroma_db/`, `bm25_*.pkl`, uploaded PDFs) is not durable on free hosting.
-- A PDF that *looks* like one page can still be two pages to the extractor; page labels follow stored `startPage`/`endPage` (0-based, +1 in the UI).
+- Answer correctness and faithfulness are not measured (no judge yet).
+- The rate limiter is in memory and per instance.
+- Memory footprint about **490 MB** idle working set locally (about **560 MB** after one small upload), so hosting needs roughly **1–2 GB** RAM; see `docs/DEPLOY.md`.
+- Local disk (`chroma_db/`, `bm25_*.pkl`, uploaded PDFs) is ephemeral on many free hosts.
 
 ---
 
-## Setup / running
+## Roadmap (not done)
 
-Requires Python 3.10+ and Node.js (for the frontend).
-
-1. Install Python dependencies from the repo root:
-
-```bash
-pip install -r requirements.txt
-```
-
-2. Create a `.env` file at the **repo root** with your Groq API key (see `.env.example`):
-
-```
-GROQ_API_KEY=your_groq_api_key_here
-```
-
-You can get a free API key at [console.groq.com](https://console.groq.com). The `.env` file is gitignored — never commit it.
-
-3. Start the FastAPI server from the repo root:
-
-```bash
-python -m uvicorn month2_api_service.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-The API listens on [http://localhost:8000](http://localhost:8000). `GET /healthz` should return `{"status": "ok"}`.
-
-4. Start the React frontend:
-
-```bash
-cd month2_frontend
-npm install
-npm run dev
-```
-
-Open the URL Vite prints (usually [http://localhost:5173](http://localhost:5173)). Upload a PDF, then ask a question.
-
-> Note: this repo path contains `&`, which breaks Windows `vite.cmd` shims. Frontend scripts call Vite via `node` instead. The same ampersand breaks `npm run lint` (`oxlint.cmd`); run `node .\node_modules\oxlint\bin\oxlint` from `month2_frontend` instead. Do not rename the project folder for this.
-
-Month 1 notebooks and the CLI still use their own setup (FAISS, Jupyter); see the Month 1 section below.
-
----
-
-## Evaluation
-
-Offline harness under `evaluation/`. It calls the same `answer_question` path as production (not the HTTP route), saves raw results, then scores retrieval against the golden evidence. The LLM judge is not built yet.
-
-| File | Role |
-| --- | --- |
-| `evaluation/golden_dataset.json` | 20 questions on one document (18 answerable, 2 unanswerable; 9 chunks) |
-| `evaluation/rubrics.json` | Four dimensions (correctness, completeness, relevance, faithfulness); judge not implemented |
-| `evaluation/run_eval.py` | Runner: executes questions, writes `evaluation/results/run_<timestamp>.json` |
-| `evaluation/retrieval_metrics.py` | Hit@1 / Hit@k / recall / MRR, plus unanswerable "I don't know" check |
-
-### How to run
-
-From the repo root, with the project venv and a `.env` that contains `GROQ_API_KEY`:
-
-```powershell
-# Dense retrieval filters Chroma by session_id + document_id.
-# Read session_id from the documents collection metadata for the golden document_id.
-# Do not commit the real value.
-$env:EVAL_SESSION_ID = "<session_id from Chroma chunk metadata>"
-
-.\.venv\Scripts\python.exe evaluation/run_eval.py --limit 1
-.\.venv\Scripts\python.exe evaluation/run_eval.py --delay 1
-.\.venv\Scripts\python.exe evaluation/run_eval.py --ids 17 18 --temperature default --delay 1
-.\.venv\Scripts\python.exe evaluation/run_eval.py --temperature default --delay 1
-.\.venv\Scripts\python.exe evaluation/retrieval_metrics.py evaluation/results/run_<timestamp>.json
-```
-
-The runner defaults to `temperature=0` and always uses `use_cache=False`. Pass `--temperature default` to omit temperature like `POST /query`. Each run file stores a config snapshot (models, temperature, cache flag, chunk counts, expansion flags, named top-k constants), `git_commit`, and `git_dirty`. Per-question rows include `expansion_failed` and `expansion_attempts`. Results under `evaluation/results/` are gitignored.
-
-### Baseline results
-
-**Day 23** — `run_20261007_103939` at commit `1e554548d56d8d851918907e811f0ea304d778bd` (`git_dirty`: false). Of 20 questions, 2 answers failed (items 17 and 18). Retrieval metrics covered 16 answerable questions without errors: Hit@1 0.938, Hit@k 1.000, recall 1.000, MRR 0.969 (chance Hit@1 0.111, chance Hit@k 0.333 with N=9, mean k=3). Both unanswerable questions answered `I don't know`.
-
-**Updated baseline (default temperature)** — `run_20261011_130503` scored all 18 answerable questions (items 17 and 18 succeeded on that run): Hit@1 0.944, Hit@k 1.000, recall 1.000, MRR 0.972; unanswerable 2 of 2. A later post-change run `run_20261011_131637` matched those retrieval numbers with answer success 20 of 20 and `expansion_failed=false` on every row (no live retry/fallback). Because the expansion failure is intermittent, a clean run does not prove the fail-soft path.
-
-### Limitations and known issues
-
-- Metrics are saturated on this 9-chunk single-document corpus (Hit@k 1.0), so they cannot show whether reranking or query expansion helps.
-- Evaluation covers one document only. Multi-document evaluation is not done.
-- The LLM judge (correctness, completeness, relevance, faithfulness) is not built yet.
-- Ablation runs are not done.
-- **Expansion stage finding (Day 24):** labelled re-runs of items 17 and 18 at default temperature saw 2 of 16 item-calls fail with Groq `json_validate_failed` (empty `failed_generation`); both failures were at `query_expansion`, none at `ask`. Failures also appeared at temperature `0` in earlier sweeps (flaky, not temperature-only).
-- **Fail-soft expansion (stub-verified):** on expansion failure the pipeline retries once (~1s), then continues with the original query only and records `expansion_failed` / `expansion_attempts`. Verified with stubs only. Confirm live by watching those fields on future runs. Do not treat a clean 20/20 as proof.
-- On any raised exception the runner still stores nulls for answer fields, including `context_chunks`. For the expansion failures above, retrieval had not run yet, so there were no chunks to keep.
-- Keeping retrieved chunks when the **answer** (`ask`) call fails is not implemented (0 of 16 labelled diagnostic failures were at `ask`; revisit if it appears).
-- Why the 20b expansion model intermittently fails structured JSON is still unconfirmed.
-- A wrong `EVAL_SESSION_ID` does not raise an error: dense search can return nothing while BM25 still returns chunks, so the pipeline becomes BM25-only. The runner records per-retriever counts and stops if the first successful call has `dense_chunks_returned == 0`.
-- PowerShell `ConvertFrom-Json` can mishandle duplicate keys; run config has both `chunks_passed_to_llm` and `CHUNKS_PASSED_TO_LLM` — prefer Python `json.load` when inspecting run files.
-
-Technical notes: `findings/day23-eval-notes.md`. Day 24 short summary: `evaluation/CHANGELOG_CURSOR.md` (local / gitignored).
+- LLM judge for answer quality
+- Multi-document evaluation and ablation studies
+- Fix for heading detection on notes-style PDFs
+- Hosted / durable vector store
+- Deployment of the backend (deferred; memory and free-tier constraints)
 
 ---
 
 ## Month 1 — RAG Engine (Notebooks + CLI)
 
-A Retrieval-Augmented Generation (RAG) pipeline built **from scratch in raw Python** — no LangChain, no LlamaIndex, no framework abstractions. Every stage (PDF extraction, chunking, embeddings, vector search, prompting, generation, evaluation) is written by hand to understand the core mechanics of how RAG systems actually work.
+A Retrieval-Augmented Generation pipeline built in raw Python under `month1_rag_engine/` (no LangChain / LlamaIndex). Numbered folders are a 14-day build log; later notebooks (`12.Query_Rewriting/`, `13.Evaluation/`) are the most complete. The CLI entry point is `month1_rag_engine/main.py`. Shared sample PDF: `month1_rag_engine/data/building/`. Evaluation write-up: [`month1_rag_engine/13.Evaluation/EVALUATION.md`](month1_rag_engine/13.Evaluation/EVALUATION.md).
 
-Work lives under `month1-rag-engine/`, organized as a 14-day build log: each numbered folder is one day's work, progressively layering a new capability onto the pipeline. The final pipeline lives in the later notebooks (`12.Query_Rewriting/` and `13.Evaluation/` contain the most complete versions).
-
-### Architecture
-
-The end-to-end pipeline flow:
-
-```
-PDF document
-    │
-    ▼
-1. Text extraction          pdfplumber, page by page
-    │
-    ▼
-2. Chunking                 heading-based (hierarchical) chunks,
-    │                       with page/chunk metadata (startPage, endPage, chunk id)
-    ▼
-3. Embeddings               sentence-transformers (all-MiniLM-L6-v2)
-    │
-    ▼
-4. Vector index             FAISS (in-memory)
-    │
-    ▼
-5. Retrieval                query → embedding → top-k nearest chunks
-    │                       (optional: HyDE query rewriting — the LLM writes a
-    │                        hypothetical answer first, and *that* is embedded
-    │                        and used for the search instead of the raw query)
-    ▼
-6. Generation               Groq LLM (llama-3.3-70b-versatile) answers using
-                            only the retrieved context, with hallucination
-                            guardrails ("say I don't know if not found") and
-                            self-reported context citation
-```
-
-Everything is held in memory — there is no persistent vector store. Each notebook rebuilds the index from the source PDF when run.
-
-### Setup
-
-Requires Python 3.10+ and Jupyter.
-
-1. Install dependencies:
-
-```bash
-pip install pdfplumber sentence-transformers faiss-cpu numpy scikit-learn groq python-dotenv jupyter
-```
-
-2. Create a `.env` file at the **repo root** with your Groq API key (see `.env.example`):
-
-```
-GROQ_API_KEY=your_groq_api_key_here
-```
-
-You can get a free API key at [console.groq.com](https://console.groq.com). The `.env` file is gitignored — never commit it.
-
-> Note: days 1–7 don't need an API key at all (retrieval only). The Groq key is only required from day 8 onward, when the LLM generation layer is added.
-
-### Quick Start
-
-Run the full pipeline from the command line (PDF path + question):
-
-```bash
-python month1-rag-engine/main.py month1-rag-engine/data/building/Muhammad-pages.pdf "What did he say when asked for protection?"
-```
-
-This runs extraction → heading-based chunking → embeddings → FAISS retrieval → Groq generation, then prints the answer with page/chunk citations. Requires `GROQ_API_KEY` in the repo-root `.env`.
-
-### How to run
-
-#### Notebooks
-
-1. Start Jupyter from the repo root:
-
-```bash
-jupyter notebook
-```
-
-2. Open any day's notebook under `month1-rag-engine/` (e.g. `month1-rag-engine/13.Evaluation/retrieval_evaluation.ipynb`) and run the cells top to bottom.
-
-Notebooks load the shared sample PDF via relative paths (e.g. `../data/building/Muhammad-pages.pdf`) and the repo-root `.env` via `../../.env`, so run them from their own folder — which Jupyter does by default when you open them in place.
-
-For the most complete pipeline, use:
-
-- `month1-rag-engine/12.Query_Rewriting/query_rewriting.ipynb` — full RAG loop with optional HyDE
-- `month1-rag-engine/13.Evaluation/retrieval_evaluation.ipynb` — the same pipeline plus the 10-question evaluation harness
-
-### Folder structure
-
-Each numbered folder corresponds to one day of the build and contains that day's notebook. Later days re-include the earlier stages, so each notebook is self-contained.
-
-| Folder | Day | What was built |
-|---|---|---|
-| `1.Extraction/` | 1 | PDF → raw text extraction with pdfplumber |
-| `2.Chunking/` | 2 | Splitting extracted text into chunks |
-| `3.Embeddings/` | 3 | Chunk → vector embeddings with sentence-transformers |
-| `4.Similarity_Search/` | 4 | Manual cosine-similarity search (scikit-learn), top-k retrieval |
-| `5.Faiss_Implementation/` | 5 | Replacing manual search with a FAISS index |
-| `6.Retrieval Pipeline/` | 6 | Full retrieval pipeline end to end (no LLM yet) |
-| `7.Review_Rebuild/` | 7 | The whole pipeline rebuilt from memory, without looking |
-| `8.LLM_layer/` | 8 | Generation step added — retrieved chunks sent to Groq LLM |
-| `9.Prompt Engineering & Hallucination Control/` | 9 | Context labeling, "I don't know" guardrails, self-reported citation |
-| `10.Metadata/` | 10 | Page number and chunk id metadata attached to every chunk |
-| `11.Hierarchical_Chunking/` | 11 | Heading-based chunking with cross-page startPage/endPage tracking |
-| `12.Query_Rewriting/` | 12 | HyDE (Hypothetical Document Embeddings) query rewriting experiment |
-| `13.Evaluation/` | 13 | 10-question eval, HyDE vs No-HyDE — see `13.Evaluation/EVALUATION.md` |
-| — | 14 | Final polish: cleanup and documentation |
-
-Shared Month 1 assets:
-
-- `month1-rag-engine/data/building/` — the shared sample PDF (a short biography of Muhammad, used only as sample text for building the pipeline)
-- `month1-rag-engine/main.py` — CLI entry point for the full pipeline
-- `learning/` — the study curriculum this build follows (repo root)
-
-### Key findings & limitations
-
-Full write-up with per-question analysis in [`month1-rag-engine/13.Evaluation/EVALUATION.md`](month1-rag-engine/13.Evaluation/EVALUATION.md). Highlights:
-
-- **HyDE underperforms on narrow, single-topic documents.** Across a 10-question eval run twice, HyDE never outright won: 7/10 were ties, 2/10 went to plain retrieval, and 1/10 both failed. On a small document there aren't enough competing chunks for a hypothetical-answer embedding to improve retrieval — the correct chunk gets found either way, so HyDE just adds an extra LLM call, extra noise, and extra run-to-run variance.
-- **Correct retrieval doesn't guarantee correct generation.** In one case both pipelines retrieved exactly the right chunk, but the LLM still failed to extract the specific quoted word from it. Retrieval failures and generation failures are distinct and worth tracking separately.
-- **Chunk size and strategy depend on document structure.** Fixed-size chunking (day 2) versus heading-based hierarchical chunking (day 11) produce meaningfully different retrieval behavior; there is no universally right chunk size — it follows from how the source document is organized.
-- **Grounding instructions are robust to noisy input.** Even when HyDE fed a fabricated hypothetical into the search step, the "say I don't know if it's not in the context" prompt instruction held up and prevented hallucinated answers for genuinely absent information.
-- **Other limitations:** the index is in-memory only (no persistence), the system handles a single document, and it has only been evaluated on one short PDF — findings may not transfer to large or multi-topic corpora.
-
-### Tech stack
-
-- **Python** (raw, no RAG frameworks)
-- **pdfplumber** — PDF text extraction
-- **sentence-transformers** (`all-MiniLM-L6-v2`) — embeddings
-- **FAISS** — vector similarity search (scikit-learn cosine similarity in the early days)
-- **NumPy** — vector math
-- **Groq** (`llama-3.3-70b-versatile`) — LLM generation, and the HyDE hypothetical-answer step
-- **python-dotenv** — API key loading
-- **Jupyter** — all work is in notebooks
+Month 1 uses in-memory FAISS (no persistent store in the notebooks). Setup still needs `GROQ_API_KEY` in the repo-root `.env` for generation days.
 
 ---
 
 ## Decision Log
 
-**Heading detection heuristic (Day 17):** Headings are detected using a simple rule — a line with fewer than 8 words and no trailing period is treated as a heading. This avoids ML-based layout detection, keeping the pipeline fast and dependency-free, at the cost of occasionally misclassifying short non-heading lines.
+### Index
 
-**Page range trade-off for sub-chunks (Day 17):** When a section under one heading is split into multiple smaller chunks, every sub-chunk inherits the parent section's full startPage–endPage range rather than a precise individual page number. This was a deliberate simplification to avoid tracking page numbers at the line level inside the sub-chunking splitter.
+1. [Heading detection heuristic](#1-heading-detection-heuristic)
+2. [Page range trade-off for sub-chunks](#2-page-range-trade-off-for-sub-chunks)
+3. [Fallback for documents with no detected headings](#3-fallback-for-documents-with-no-detected-headings)
+4. [Extract the query pipeline from the route](#4-extract-the-query-pipeline-from-the-route)
+5. [Evaluation design: separate stages, fixed generation settings, config per run](#5-evaluation-design-separate-stages-fixed-generation-settings-config-per-run)
+6. [Named constants for pipeline settings](#6-named-constants-for-pipeline-settings)
+7. [Silent BM25 fallback and dense-count guard](#7-silent-bm25-fallback-and-dense-count-guard)
+8. [Saturated retrieval metrics on a 9-chunk corpus](#8-saturated-retrieval-metrics-on-a-9-chunk-corpus)
+9. [Failure accounting next to metrics](#9-failure-accounting-next-to-metrics)
+10. [Graceful degradation for query expansion](#10-graceful-degradation-for-query-expansion)
+11. [Visible fallbacks in eval config](#11-visible-fallbacks-in-eval-config)
+12. [Hard-delete order with Chroma last](#12-hard-delete-order-with-chroma-last)
+13. [404 for foreign document ids](#13-404-for-foreign-document-ids)
+14. [Limits and generic client errors](#14-limits-and-generic-client-errors)
+15. [Render-only answer formatting](#15-render-only-answer-formatting)
+16. [Not deploying to a 512 MB free host](#16-not-deploying-to-a-512-mb-free-host)
 
-**Fallback for documents with no detected headings (Day 17):** If no headings are found in a document, the whole document is wrapped into a single synthetic section (heading: "Full Document") and passed through the same `chunk_sections()` function used for heading-based documents, avoiding duplicate chunking logic.
+### 1. Heading detection heuristic
 
-**Extract the query pipeline from the route**
+- **Context:** Need a cheap way to split PDF text into sections without a layout model.
+- **Options:** (A) ML layout detection, (B) simple line heuristic, (C) fixed-size only.
+- **Decision:** B — a line with fewer than 8 words and no trailing period is treated as a heading.
+- **Consequences:** Fast and dependency-free; short non-heading lines can be misclassified (notes-style PDFs over-fragment).
+
+### 2. Page range trade-off for sub-chunks
+
+- **Context:** A section under one heading can split into multiple fixed-size chunks.
+- **Options:** (A) track precise page per sub-chunk, (B) inherit the parent section’s startPage–endPage.
+- **Decision:** B.
+- **Consequences:** Simpler splitter; sub-chunks may show a wider page range than the words they contain.
+
+### 3. Fallback for documents with no detected headings
+
+- **Context:** Some PDFs never trip the heading heuristic.
+- **Options:** (A) separate chunking path, (B) one synthetic `"Full Document"` section through the same `chunk_sections()`.
+- **Decision:** B.
+- **Consequences:** One chunking implementation; headerless docs still ingest.
+
+### 4. Extract the query pipeline from the route
 
 - **Context:** Preparing an offline evaluation harness showed that `ask` only receives chunks that are already reranked. Retrieve, rerank, and the call to `ask` lived inside `ask_question` in `month2_api_service/routes/api.py`. Rerank scores were dropped before the HTTP response, and the route required a session cookie. A script could not run or observe that pipeline.
 - **Options considered:** (A) extract retrieve → rerank → ask into one service function, (B) copy the retrieval logic into the evaluation runner, (C) call the HTTP route from the runner.
-- **Decision:** A. `answer_question` in `month2_api_service/services/rag.py` is the pipeline. The route only checks the session cookie and shapes the existing HTTP response. One function is the production path, so the code under evaluation is the code that serves requests, and a script can call it without HTTP.
+- **Decision:** A. `answer_question` in `month2_api_service/services/rag.py` is the pipeline. The route only checks the session cookie and shapes the existing HTTP response.
 - **Rejected:** B would make a second copy of retrieval that can drift from production. C keeps the pipeline behind a cookie and the old response, which still dropped scores and did not expose the exact chunks passed to the LLM.
-- **Consequences:** The route and a future runner share one path. `context_chunks` carries section number, chunk number, rerank score, and full text for every chunk passed to the LLM, in rank order, so faithfulness can be checked against that context. The HTTP body is unchanged: a cache hit is still an SSE `answer` event plus a `sources` event, and a cache miss is still `{"answer", "citations"}`. Cache writes still happen inside `ask`. Scores from a cache hit are not available, because the cache never stored them.
+- **Consequences:** The route and a future runner share one path. `context_chunks` carries section number, chunk number, rerank score, and full text for every chunk passed to the LLM, in rank order. The HTTP body is unchanged. Cache writes still happen inside `ask`. Scores from a cache hit are not available, because the cache never stored them.
 
-**Evaluation design: separate stages, fixed generation settings, config per run**
+### 5. Evaluation design: separate stages, fixed generation settings, config per run
 
 - **Context:** Offline evaluation needs raw answers and the exact chunks passed to the LLM, without going through HTTP or the query cache.
 - **Options considered:** (A) one script that runs questions, scores retrieval, and judges answers together; (B) separate runner, metrics, and (later) judge stages; (C) call the HTTP `/query` route from the eval script.
@@ -355,23 +236,23 @@ Full write-up with per-question analysis in [`month1-rag-engine/13.Evaluation/EV
 - **Rejected:** A mixes failure modes and makes partial re-runs harder. C keeps session cookies and response shaping in the path and still drops scores on the HTTP body.
 - **Consequences:** Retrieval can be scored without a judge. Generation settings for a baseline run are fixed and recorded. Failed calls and unanswerable checks stay visible next to the metrics.
 
-**Named constants for pipeline settings**
+### 6. Named constants for pipeline settings
 
 - **Context:** Top-k values, model names, and chunk size lived as literals or were only partly exposed, so a run file could not record what the pipeline actually used without guessing.
 - **Options considered:** (A) leave literals and write `"unknown"` in the run config; (B) name the settings as importable constants and read them into the run file; (C) copy numbers into the runner by hand.
-- **Decision:** B. `month2_api_service/services/rag.py` and `month1_rag_engine/main.py` expose named constants (`EMBEDDING_MODEL`, `RERANKER_MODEL`, `DENSE_TOP_K`, `SPARSE_TOP_K`, `RRF_TOP_N`, `CHUNKS_PASSED_TO_LLM`, `maxChunkLength`, `overlap`). The runner imports those values into the run config.
+- **Decision:** B. `month2_api_service/services/rag.py` and `month1_rag_engine/main.py` expose named constants. The runner imports those values into the run config.
 - **Rejected:** A loses reproducibility. C can drift from production.
 - **Consequences:** Each run file records the settings that were imported from code. Changing a constant changes both the pipeline and the next run's config.
 
-**Silent BM25 fallback and dense-count guard**
+### 7. Silent BM25 fallback and dense-count guard
 
 - **Context:** Dense Chroma queries filter on `session_id` and `document_id`. BM25 loads `bm25_{document_id}.pkl` and does not use `session_id`. A wrong `EVAL_SESSION_ID` therefore returns no dense hits while sparse retrieval still works.
 - **Options considered:** (A) treat empty dense results as a hard error inside `query_chromadb`; (B) record per-retriever counts on the eval config and abort the run if the first success has `dense_chunks_returned == 0`; (C) ignore the mismatch and score hybrid as usual.
-- **Decision:** B for the offline runner. Production retrieval behavior is unchanged. The runner prints that the session id is probably wrong and that the run would measure BM25 only.
+- **Decision:** B for the offline runner. Production retrieval behavior is unchanged.
 - **Rejected:** A would change production query behavior. C would publish hybrid metrics for a BM25-only path.
 - **Consequences:** A bad session id fails the eval run early. Hybrid metrics are not claimed when dense retrieval returned nothing.
 
-**Saturated retrieval metrics on a 9-chunk corpus**
+### 8. Saturated retrieval metrics on a 9-chunk corpus
 
 - **Context:** Baseline retrieval metrics on the golden document reached Hit@k 1.000, Hit@1 0.938, recall 1.000, and MRR 0.969 (16 answerable questions; chance Hit@k 0.333 with N=9 and k=3).
 - **Options considered:** (A) treat these numbers as proof that reranking and query expansion help; (B) report them as a baseline and note that the metric is saturated on this corpus; (C) drop Hit@k because it cannot move.
@@ -379,26 +260,61 @@ Full write-up with per-question analysis in [`month1-rag-engine/13.Evaluation/EV
 - **Rejected:** A overclaims. C throws away a useful check for total retrieval failure.
 - **Consequences:** This run cannot show whether reranking or query expansion improved ranking. Multi-document evaluation is not done yet.
 
-**Failure accounting next to metrics**
+### 9. Failure accounting next to metrics
 
-- **Context:** Items 17 and 18 failed with Groq `json_validate_failed` during Day 23. Excluding them from retrieval averages without saying so would make the harness look cleaner than the run. (Day 24 later showed those labelled failures were at query expansion, before retrieval — see Decision Log entries below. The runner still stores nulls on any raised exception.)
+- **Context:** Items 17 and 18 failed with Groq `json_validate_failed` during Day 23. Excluding them from retrieval averages without saying so would make the harness look cleaner than the run. (Day 24 later showed those labelled failures were at query expansion, before retrieval. The runner still stores nulls on any raised exception.)
 - **Options considered:** (A) drop failed rows quietly from all reporting; (B) exclude them from retrieval means when `context_chunks` are absent, but list them as exclusions with the error text, and keep the answer-failure count visible; (C) retry until every row succeeds before scoring.
 - **Decision:** B. Retrieval metrics are computed only over answerable rows without errors. Exclusions and the raw run's error fields remain part of the report. Day 24 also prints `Answer success: X of Y` next to the metrics.
 - **Rejected:** A hides reliability problems. C blocks scoring when Groq rejects a structured output.
 - **Consequences:** Hit@k 1.0 does not mean 20/20 answers succeeded. Failed answers stay visible beside the retrieval totals.
 
-**Graceful degradation for query expansion (Day 24)**
+### 10. Graceful degradation for query expansion
 
-- **Context:** Labelled re-runs showed intermittent Groq `json_validate_failed` on the optional `query_expansion` call (`gpt-oss-20b`), not on the answer call. Raising aborted the whole question even though retrieval could still use the original query.
-- **Options considered:** (A) do nothing; (B) retry once then still raise; (C) retry once then fall back to the original query only; (D) change temperature/prompts/models/schemas. Option C with visible flags was chosen by Claude on Umair’s behalf (Umair was short on time and did not pick among the options himself).
+- **Context:** Labelled re-runs showed intermittent Groq `json_validate_failed` on the optional `query_expansion` call, not on the answer call. Raising aborted the whole question even though retrieval could still use the original query.
+- **Options considered:** (A) do nothing; (B) retry once then still raise; (C) retry once then fall back to the original query only; (D) change temperature/prompts/models/schemas. Option C with visible flags was chosen for simplicity and low risk when a pick was needed under time pressure.
 - **Decision:** C. `_query_expansion_with_retry` tries twice (~1s sleep), then returns no expansions; `answer_question` continues. `ask` failures still raise. Production temperature, prompts, models, and schemas unchanged. Success HTTP body of `POST /query` unchanged.
 - **Rejected:** A leaves flaky 500s for an optional step. D was out of scope without a confirmed root cause. Changing ask behavior was rejected (0 of 16 labelled failures were at `ask`).
 - **Consequences:** Users may get an answer without expanded queries after a double expansion failure. Stub-verified only; live confirmation is watching `expansion_failed` / `expansion_attempts` on future runs. A clean 20/20 does not prove the path fired.
 
-**Visible fallbacks in eval config (Day 24)**
+### 11. Visible fallbacks in eval config
 
 - **Context:** A silent fallback would hide that retrieval ran without expansion and make metrics hard to interpret.
 - **Options considered:** (A) fail soft with no signal; (B) log only; (C) record `expansion_failed` and `expansion_attempts` on the call config and each eval result row, and print counts in the runner/metrics summaries.
 - **Decision:** C (with logging). Cache hits record `false` / `0`. Metrics print `Ran without expansion` only when the field exists so older run files still work.
 - **Rejected:** A and B alone are not enough for offline comparison across runs.
 - **Consequences:** Run JSON shows when a question continued without expansion. Operators can correlate that flag with retrieval scores later.
+
+### 12. Hard-delete order with Chroma last
+
+- **Context:** `DELETE /documents/{document_id}` must remove cache entries, BM25, the PDF, and Chroma chunks without leaving a half-deleted document that still answers queries.
+- **Options:** (A) delete Chroma first, (B) delete Chroma last after the other stages succeed, (C) best-effort unordered deletes.
+- **Decision:** B — cache → BM25 → PDF → Chroma last (see `month2_api_service/routes/api.py`).
+- **Consequences:** If an early stage fails, Chroma still holds chunks so retry can finish; partial progress is reported in the error body.
+
+### 13. 404 for foreign document ids
+
+- **Context:** List and delete must not leak or mutate another session’s documents.
+- **Options:** (A) 403 with detail, (B) 404 for missing or foreign ids, (C) silent no-op.
+- **Decision:** B — foreign or missing id → 404 `"Document not found"`.
+- **Consequences:** Clients cannot distinguish “not yours” from “never existed”; enumeration across sessions is harder. Chosen for simplicity and low risk.
+
+### 14. Limits and generic client errors
+
+- **Context:** Public upload/query needed size/type/page/session caps and safe error text without leaking stack traces.
+- **Options:** (A) unlimited local-dev behavior, (B) env-configurable limits plus generic 4xx/5xx with request ids, (C) WAF-only controls.
+- **Decision:** B — defaults in `config.py` / `.env.example`; mid-ingest cleanup; Groq failures → 503 fixed message on `/query`.
+- **Consequences:** Abuse is bounded per process; operators use request ids in logs. Rate limits are in-memory and reset on restart.
+
+### 15. Render-only answer formatting
+
+- **Context:** Model answers include markdown-like lists and `**bold**`; showing raw markers is hard to read, but HTML injection is unsafe.
+- **Options:** (A) `dangerouslySetInnerHTML`, (B) markdown library, (C) small UI-only formatter to React text nodes.
+- **Decision:** C — `month2_frontend/src/utils/formatAnswer.js` (covered by `node --test`).
+- **Consequences:** Limited markdown subset; no HTML injection from answer text. Chosen for simplicity and low risk.
+
+### 16. Not deploying to a 512 MB free host
+
+- **Context:** A local memory audit (Windows, CPU torch, spare port, no reload) measured about **490 MB** working set after startup and about **560 MB** after one small PDF upload (no Groq call).
+- **Options:** (A) deploy anyway on 512 MB, (B) defer hosting and document a ≥1–2 GB plan, (C) change models/chunking to shrink RAM immediately.
+- **Decision:** B for Day 30 lite — do not host the backend now; add sample document UX and `docs/DEPLOY.md`. Chunking, retrieval, prompts, models, schema, and cache left unchanged.
+- **Consequences:** Reviewers run locally. Free-tier spin-down and non-durable disk remain open issues for a future deploy.

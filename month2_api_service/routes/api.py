@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 LOG_FILE = Path("logs/query_logs.jsonl")
 DOCUMENTS_DIR = Path("month2_api_service/documents")
 BM25_DIR = Path(".")
+SAMPLE_PDF_PATH = Path(__file__).resolve().parent.parent / "sample_data" / "rag_how_it_works.pdf"
+SAMPLE_PDF_FILENAME = "rag_how_it_works.pdf"
 
 rate_limiter = InMemoryRateLimiter()
 
@@ -233,6 +235,152 @@ async def _read_upload_capped(upload: UploadFile, max_bytes: int) -> bytes:
             )
         chunks.append(piece)
     return b"".join(chunks)
+
+
+def _ensure_session_capacity(session_id: str, request_id: str) -> None:
+    try:
+        existing = count_documents_for_session(session_id)
+    except Exception:
+        logger.exception("session doc count failed request_id=%s", request_id)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"An unexpected error occurred. Please try again. "
+                f"Request id: {request_id}"
+            ),
+        ) from None
+
+    if existing >= app_config.MAX_DOCS_PER_SESSION:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Document limit reached. This session may have at most "
+                f"{app_config.MAX_DOCS_PER_SESSION} documents. "
+                f"Delete one before uploading another."
+            ),
+        )
+
+
+def ingest_pdf_bytes(
+    raw: bytes,
+    safe_name: str,
+    session_id: str,
+    request_id: str,
+) -> dict:
+    """Run the existing upload pipeline on PDF bytes. Returns response fields."""
+    if not is_pdf_magic(raw):
+        raise HTTPException(
+            status_code=415,
+            detail="Only PDF files are supported.",
+        )
+
+    if len(raw) > app_config.MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File too large. Maximum upload size is "
+                f"{app_config.MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+            ),
+        )
+
+    document_id = str(uuid.uuid4())
+    DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    filepath = DOCUMENTS_DIR / f"{document_id}_{safe_name}"
+    if not _path_inside_dir(filepath, DOCUMENTS_DIR):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    try:
+        filepath.write_bytes(raw)
+
+        fail_after = _INGEST_FAIL_AFTER or os.getenv("INGEST_FAIL_AFTER")
+        if fail_after == "after_save":
+            raise RuntimeError("forced ingest failure after_save")
+
+        dictionary_for_pages = extract_pages(pdf_path=str(filepath))
+
+        page_count = len(dictionary_for_pages)
+        if page_count > app_config.MAX_PDF_PAGES:
+            cleanup_upload_artifacts(document_id, session_id)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"PDF has too many pages ({page_count}). "
+                    f"Maximum is {app_config.MAX_PDF_PAGES}."
+                ),
+            )
+
+        total_chars = sum(len(page.get("text") or "") for page in dictionary_for_pages)
+        if total_chars < app_config.MIN_EXTRACTABLE_CHARS:
+            cleanup_upload_artifacts(document_id, session_id)
+            raise HTTPException(
+                status_code=422,
+                detail="No extractable text (scanned PDFs are not supported)",
+            )
+
+        sections, fallback = detect_sections(dictionary_for_pages)
+
+        if not fallback:
+            whole_document_text = " ".join(
+                page["text"] or "" for page in dictionary_for_pages
+            )
+            fake_section = {
+                "sectionNumber": 1,
+                "heading": "Full Document",
+                "startPage": dictionary_for_pages[0]["pageNo"],
+                "endPage": dictionary_for_pages[-1]["pageNo"],
+                "section_text": whole_document_text,
+            }
+            chunks = chunk_sections([fake_section], document_id)
+        else:
+            chunks = chunk_sections(sections, document_id)
+
+        if not chunks:
+            cleanup_upload_artifacts(document_id, session_id)
+            raise HTTPException(
+                status_code=422,
+                detail="No extractable text (scanned PDFs are not supported)",
+            )
+
+        sparse_chunks = []
+        for chunk in chunks:
+            chunk["document_id"] = f"{document_id}"
+            chunk["session_id"] = f"{session_id}"
+            sparse_chunks.append(chunk["chunk_text"].split())
+
+        ids, chunksText, metadata, embeddings = create_chromadb_params(chunks)
+        save_to_chromadb(ids, embeddings, chunksText, metadata)
+
+        if fail_after == "after_chroma":
+            raise RuntimeError("forced ingest failure after_chroma")
+
+        bm25 = BM25Okapi(sparse_chunks)
+        for id_, chunk in zip(ids, chunks):
+            chunk["id"] = id_
+
+        bm25_path = _bm25_path_for_document(document_id)
+        with open(bm25_path, "wb") as f:
+            bm25_chunksObject = {"bm25": bm25, "chunks": chunks}
+            pickle.dump(bm25_chunksObject, f)
+
+    except HTTPException:
+        raise
+    except Exception:
+        cleanup_upload_artifacts(document_id, session_id)
+        logger.exception("Upload/ingest failed request_id=%s", request_id)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"An unexpected error occurred. Please try again. "
+                f"Request id: {request_id}"
+            ),
+        ) from None
+
+    return {
+        "message": "Document uploaded and processed successfully",
+        "document_id": document_id,
+        "filename": safe_name,
+        "chunks_count": len(chunks),
+    }
 
 
 router = APIRouter()
@@ -509,135 +657,48 @@ async def upload_document(
         app_config.UPLOAD_RATE_LIMIT_PER_MINUTE,
     )
 
-    # Enforce session document cap before allocating a new id / writing bytes.
-    try:
-        existing = count_documents_for_session(session_id)
-    except Exception:
-        logger.exception("session doc count failed request_id=%s", request_id)
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"An unexpected error occurred. Please try again. "
-                f"Request id: {request_id}"
-            ),
-        ) from None
-
-    if existing >= app_config.MAX_DOCS_PER_SESSION:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Document limit reached. This session may have at most "
-                f"{app_config.MAX_DOCS_PER_SESSION} documents. "
-                f"Delete one before uploading another."
-            ),
-        )
+    _ensure_session_capacity(session_id, request_id)
 
     raw = await _read_upload_capped(document, app_config.MAX_UPLOAD_BYTES)
-
-    if not is_pdf_magic(raw):
-        raise HTTPException(
-            status_code=415,
-            detail="Only PDF files are supported.",
-        )
-
     safe_name = sanitize_filename(
         document.filename, max_len=app_config.SAFE_FILENAME_MAX_LEN
     )
-    document_id = str(uuid.uuid4())
-    DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    filepath = DOCUMENTS_DIR / f"{document_id}_{safe_name}"
-    if not _path_inside_dir(filepath, DOCUMENTS_DIR):
-        raise HTTPException(status_code=400, detail="Invalid filename.")
+    return ingest_pdf_bytes(raw, safe_name, session_id, request_id)
 
-    try:
-        filepath.write_bytes(raw)
 
-        fail_after = _INGEST_FAIL_AFTER or os.getenv("INGEST_FAIL_AFTER")
-        if fail_after == "after_save":
-            raise RuntimeError("forced ingest failure after_save")
+@router.post("/load-sample")
+def load_sample(
+    request: Request,
+    response: Response,
+    session_id: str | None = Cookie(default=None),
+):
+    """Ingest the bundled sample PDF into the current session."""
+    request_id = _request_id(request)
 
-        dictionary_for_pages = extract_pages(pdf_path=str(filepath))
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+        response.set_cookie(key="session_id", value=session_id)
 
-        page_count = len(dictionary_for_pages)
-        if page_count > app_config.MAX_PDF_PAGES:
-            cleanup_upload_artifacts(document_id, session_id)
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"PDF has too many pages ({page_count}). "
-                    f"Maximum is {app_config.MAX_PDF_PAGES}."
-                ),
-            )
+    _rate_limit_or_429(
+        f"upload:{session_id}",
+        app_config.UPLOAD_RATE_LIMIT_PER_MINUTE,
+    )
+    _ensure_session_capacity(session_id, request_id)
 
-        total_chars = sum(len(page.get("text") or "") for page in dictionary_for_pages)
-        if total_chars < app_config.MIN_EXTRACTABLE_CHARS:
-            cleanup_upload_artifacts(document_id, session_id)
-            raise HTTPException(
-                status_code=422,
-                detail="No extractable text (scanned PDFs are not supported)",
-            )
-
-        sections, fallback = detect_sections(dictionary_for_pages)
-
-        if not fallback:
-            whole_document_text = " ".join(
-                page["text"] or "" for page in dictionary_for_pages
-            )
-            fake_section = {
-                "sectionNumber": 1,
-                "heading": "Full Document",
-                "startPage": dictionary_for_pages[0]["pageNo"],
-                "endPage": dictionary_for_pages[-1]["pageNo"],
-                "section_text": whole_document_text,
-            }
-            chunks = chunk_sections([fake_section], document_id)
-        else:
-            chunks = chunk_sections(sections, document_id)
-
-        if not chunks:
-            cleanup_upload_artifacts(document_id, session_id)
-            raise HTTPException(
-                status_code=422,
-                detail="No extractable text (scanned PDFs are not supported)",
-            )
-
-        sparse_chunks = []
-        for chunk in chunks:
-            chunk["document_id"] = f"{document_id}"
-            chunk["session_id"] = f"{session_id}"
-            sparse_chunks.append(chunk["chunk_text"].split())
-
-        ids, chunksText, metadata, embeddings = create_chromadb_params(chunks)
-        save_to_chromadb(ids, embeddings, chunksText, metadata)
-
-        if fail_after == "after_chroma":
-            raise RuntimeError("forced ingest failure after_chroma")
-
-        bm25 = BM25Okapi(sparse_chunks)
-        for id_, chunk in zip(ids, chunks):
-            chunk["id"] = id_
-
-        bm25_path = _bm25_path_for_document(document_id)
-        with open(bm25_path, "wb") as f:
-            bm25_chunksObject = {"bm25": bm25, "chunks": chunks}
-            pickle.dump(bm25_chunksObject, f)
-
-    except HTTPException:
-        raise
-    except Exception:
-        cleanup_upload_artifacts(document_id, session_id)
-        logger.exception("Upload/ingest failed request_id=%s", request_id)
+    if not SAMPLE_PDF_PATH.is_file():
+        logger.error("sample PDF missing path=%s", SAMPLE_PDF_PATH)
         raise HTTPException(
             status_code=500,
             detail=(
                 f"An unexpected error occurred. Please try again. "
                 f"Request id: {request_id}"
             ),
-        ) from None
+        )
 
-    return {
-        "message": "Document uploaded and processed successfully",
-        "document_id": document_id,
-        "filename": safe_name,
-        "chunks_count": len(chunks),
-    }
+    raw = SAMPLE_PDF_PATH.read_bytes()
+    safe_name = sanitize_filename(
+        SAMPLE_PDF_FILENAME, max_len=app_config.SAFE_FILENAME_MAX_LEN
+    )
+    result = ingest_pdf_bytes(raw, safe_name, session_id, request_id)
+    result["message"] = "Sample document loaded and processed successfully"
+    return result

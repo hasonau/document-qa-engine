@@ -1,0 +1,170 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >>
+endobj
+5 0 obj
+<< /Length 1939 >>
+stream
+BT
+/F1 11 Tf
+50 760 Td
+/F1 13 Tf
+(How Retrieval-Augmented Generation Works) Tj
+/F1 11 Tf
+0 -14 Td
+() Tj
+0 -14 Td
+/F1 13 Tf
+(Why Plain Generators Fall Short) Tj
+/F1 11 Tf
+0 -14 Td
+(A language model answers from patterns learned during training. When a question) Tj
+0 -14 Td
+(needs a private handbook, a fresh policy, or a fact that never appeared in training,) Tj
+0 -14 Td
+(the model may invent a confident but wrong detail. That failure mode is often called) Tj
+0 -14 Td
+(hallucination. Retrieval-augmented generation, or RAG, reduces the gap by fetching) Tj
+0 -14 Td
+(relevant source text first and then asking the model to answer using that text.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+/F1 13 Tf
+(The Indexing Pipeline) Tj
+/F1 11 Tf
+0 -14 Td
+(Indexing turns a document into searchable pieces. First the system extracts plain) Tj
+0 -14 Td
+(text from each page. Next it splits the text into overlapping chunks so that a) Tj
+0 -14 Td
+(sentence near a boundary is less likely to be cut in half. Each chunk is stored with) Tj
+0 -14 Td
+(metadata such as page range, section heading, and a stable chunk identifier. Dense) Tj
+0 -14 Td
+(embeddings map chunk text into vectors so similar meanings land near each other.) Tj
+0 -14 Td
+(A separate sparse index keeps term statistics for keyword matching. In this sample) Tj
+0 -14 Td
+(guide, the embedding store demo codeword is amber-lattice-47, which appears only) Tj
+0 -14 Td
+(in the indexing discussion so retrieval tests can locate it reliably.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+/F1 13 Tf
+(Dense Versus Sparse Retrieval) Tj
+/F1 11 Tf
+0 -14 Td
+(Dense retrieval compares the question embedding to chunk embeddings and returns) Tj
+0 -14 Td
+(the nearest neighbors. It helps when the question paraphrases the source. Sparse) Tj
+0 -14 Td
+(retrieval scores overlapping words and phrases; it helps when rare names, codes,) Tj
+0 -14 Td
+(or exact titles matter. Strong systems often run both and then merge the lists.) Tj
+ET
+endstream
+endobj
+6 0 obj
+<< /Length 2429 >>
+stream
+BT
+/F1 11 Tf
+50 760 Td
+/F1 13 Tf
+(Hybrid Fusion And Reranking) Tj
+/F1 11 Tf
+0 -14 Td
+(A common merge method is reciprocal rank fusion. Each retriever contributes a) Tj
+0 -14 Td
+(rank-based score, and the scores are summed so that a chunk strong in either list) Tj
+0 -14 Td
+(can rise. After hybrid merge, this guide keeps twelve candidate passages before) Tj
+0 -14 Td
+(any reranking step. A cross-encoder reranker then reads the question together with) Tj
+0 -14 Td
+(each candidate and reorders them. Only the top few passages are passed to the) Tj
+0 -14 Td
+(generator, which keeps prompts short and reduces distraction from weak matches.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+/F1 13 Tf
+(Grounded Answering) Tj
+/F1 11 Tf
+0 -14 Td
+(The generator should treat retrieved passages as the only evidence for factual) Tj
+0 -14 Td
+(claims. Good prompts tell the model to admit when the context is insufficient) Tj
+0 -14 Td
+(instead of guessing. The grounded answer step in this guide always uses) Tj
+0 -14 Td
+(temperature zero so wording stays stable across repeated demos. Citations that) Tj
+0 -14 Td
+(point back to section and page help a reader verify the answer against the PDF.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+/F1 13 Tf
+(Operational Limits Worth Knowing) Tj
+/F1 11 Tf
+0 -14 Td
+(Chunk size and overlap change which sentences travel together. Overly aggressive) Tj
+0 -14 Td
+(heading detection can shatter notes-style PDFs into tiny fragments. Vague questions) Tj
+0 -14 Td
+(such as asking what a long document is about may retrieve arbitrary middle chunks.) Tj
+0 -14 Td
+(Free hosting disks are often temporary, so uploaded files can disappear after a) Tj
+0 -14 Td
+(restart. Rate limits that live only in memory reset when the process restarts.) Tj
+0 -14 Td
+(These limits do not remove the value of RAG; they explain why demos need clear) Tj
+0 -14 Td
+(sample questions and why production systems pick durable storage and sized hosts.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+/F1 13 Tf
+(A Short Checklist For Builders) Tj
+/F1 11 Tf
+0 -14 Td
+(Store session or tenant identifiers on every chunk. Filter retrieval by those) Tj
+0 -14 Td
+(identifiers so one user never sees another user document. Log whether an answer) Tj
+0 -14 Td
+(came from cache. Measure retrieval with labeled questions before debating model) Tj
+0 -14 Td
+(size. Keep an offline sample document so reviewers can try the product without) Tj
+0 -14 Td
+(uploading a private file on the first visit.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000373 00000 n 
+0000002364 00000 n 
+0000004845 00000 n 
+trailer<< /Size 8 /Root 1 0 R >>
+startxref
+4915
+%%EOF
